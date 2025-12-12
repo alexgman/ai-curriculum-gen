@@ -1,0 +1,97 @@
+# =============================================================================
+# AI Curriculum Builder - Environment Variables
+# Rename this file to .env and fill in your values
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# CORE: Anthropic Claude AI (REQUIRED)
+# Get at: https://console.anthropic.com/
+# -----------------------------------------------------------------------------
+ANTHROPIC_API_KEY=sk-ant-api03-your-key-here
+
+# -----------------------------------------------------------------------------
+# CORE: AWS (REQUIRED)
+# Get at: https://aws.amazon.com/ → IAM → Users
+# -----------------------------------------------------------------------------
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
+AWS_REGION=us-east-1
+AWS_S3_BUCKET=curriculum-builder-storage
+
+# -----------------------------------------------------------------------------
+# SCRAPING: Firecrawl (REQUIRED)
+# Get at: https://www.firecrawl.dev/
+# Free: 500 pages/month
+# -----------------------------------------------------------------------------
+FIRECRAWL_API_KEY=fc-your-key-here
+
+# -----------------------------------------------------------------------------
+# SEARCH: Serper - Google Search (REQUIRED)
+# Get at: https://serper.dev/
+# Free: 2,500 searches/month
+# -----------------------------------------------------------------------------
+SERPER_API_KEY=your-serper-key-here
+
+# -----------------------------------------------------------------------------
+# SENTIMENT: Reddit API (REQUIRED)
+# Get at: https://www.reddit.com/prefs/apps
+# Free: 60 requests/minute
+# -----------------------------------------------------------------------------
+REDDIT_CLIENT_ID=your-reddit-client-id
+REDDIT_CLIENT_SECRET=your-reddit-client-secret
+REDDIT_USER_AGENT=curriculum_builder/1.0
+
+# -----------------------------------------------------------------------------
+# SEARCH: Tavily (OPTIONAL - AI-optimized search)
+# Get at: https://tavily.com/
+# Free: 1,000 searches/month
+# -----------------------------------------------------------------------------
+TAVILY_API_KEY=tvly-your-key-here
+
+# -----------------------------------------------------------------------------
+# PODCASTS: Listen Notes (OPTIONAL)
+# Get at: https://www.listennotes.com/api/
+# Free: 300 requests/month
+# -----------------------------------------------------------------------------
+LISTENNOTES_API_KEY=your-listennotes-key
+
+# -----------------------------------------------------------------------------
+# DATABASE (PostgreSQL)
+# -----------------------------------------------------------------------------
+DATABASE_URL=postgresql://postgres:password@localhost:5432/curriculum_builder
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your-db-password
+POSTGRES_DB=curriculum_builder
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+
+# -----------------------------------------------------------------------------
+# REDIS (Caching & Queue)
+# -----------------------------------------------------------------------------
+REDIS_URL=redis://localhost:6379/0
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# -----------------------------------------------------------------------------
+# APPLICATION SETTINGS
+# -----------------------------------------------------------------------------
+APP_NAME=AI Curriculum Builder
+APP_ENV=development
+DEBUG=true
+SECRET_KEY=generate-with-openssl-rand-hex-32
+API_VERSION=v1
+
+# Backend
+BACKEND_HOST=0.0.0.0
+BACKEND_PORT=8000
+BACKEND_URL=http://localhost:8000
+
+# Frontend
+FRONTEND_URL=http://localhost:3000
+NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+
+# -----------------------------------------------------------------------------
+# CORS (Allowed Origins)
+# -----------------------------------------------------------------------------
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+
