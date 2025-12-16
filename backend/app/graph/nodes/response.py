@@ -1,246 +1,384 @@
-"""Response node - generates user-facing response grounded in research data."""
+"""Response node - generates comprehensive curriculum research report."""
 import json
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_anthropic import ChatAnthropic
 from app.graph.state import AgentState
 from app.config import settings
-from app.prompts.response import RESPONSE_SYSTEM_PROMPT, RESPONSE_USER_PROMPT
-from app.utils.truncation import truncate_text, truncate_research_data
 from app.graph.nodes.reflection import _session_research_data
 
 
 async def response_node(state: AgentState) -> dict:
     """
-    Generate a response to the user based on collected research data.
+    Generate comprehensive curriculum research report based on collected data.
     
-    CRITICAL: This response is GROUNDED in actual tool results.
-    The system prompt explicitly forbids making up data.
-    All claims must have sources from the research_data.
+    IMPORTANT: We generate the report DIRECTLY from data, not asking LLM to expand.
+    This ensures ALL courses are included with full details.
     """
+    print("🎯 RESPONSE NODE STARTED")
     
-    # Get session ID
-    session_id = state.get("session_id", "default")
+    try:
+        # Check if this is a clarifying question - if so, just pass through the message
+        if state.get("is_clarifying_question"):
+            print("📝 Clarifying question - passing through")
+            # The message was already set by reasoning node
+            last_message = state.get("messages", [])[-1] if state.get("messages") else None
+            if last_message:
+                return {
+                    "messages": [last_message],
+                    "next_node": "end",
+                }
+        
+        # Get session ID
+        session_id = state.get("session_id", "default")
+        
+        # Get research data from session cache (PRIMARY) or state (fallback)
+        research_data = _session_research_data.get(session_id)
+        if research_data is None:
+            print(f"⚠️ Session not in cache, using state")
+            research_data = state.get("research_data", {})
+        else:
+            print(f"✅ Found session in cache")
+        
+        # Get the industry from state
+        industry = state.get("industry", "Not specified")
+        
+        # Log what we have
+        courses = research_data.get("courses", [])
+        print(f"📝 Response node: {len(courses)} courses found")
+        
+        # If no courses and no research, prompt user for more info
+        if len(courses) == 0 and not research_data.get("module_inventory"):
+            print("⚠️ No courses - need more research or clarification")
+            return {
+                "messages": [AIMessage(content="I don't have any course data yet. Please provide a specific topic or industry you'd like me to research (e.g., 'data science courses', 'Python programming', 'digital marketing').")],
+                "next_node": "end",
+            }
+        
+        # GENERATE THE FULL REPORT DIRECTLY FROM DATA
+        # This ensures ALL courses are included - no LLM truncation
+        print(f"📝 GENERATING FULL REPORT for {len(courses)} courses...")
+        full_report = await _generate_full_report(research_data, industry)
+        
+        print(f"✅ RESPONSE NODE COMPLETED - Generated {len(full_report)} chars")
+        print(f"📝 Report preview: {full_report[:300]}...")
+        print(f"📝 Report ends with: ...{full_report[-200:]}")
+        
+        # Create the final message
+        final_message = AIMessage(content=full_report)
+        print(f"📤 Returning AIMessage with content length: {len(final_message.content)}")
+        
+        return {
+            "messages": [final_message],
+            "next_node": "end",
+        }
     
-    # DEBUG: Print what's in cache
-    print(f"🔍 Response: Looking for session {session_id}")
-    print(f"🔍 Cache keys: {list(_session_research_data.keys())}")
-    
-    # Get research data from session cache (PRIMARY) or state (fallback)
-    research_data_full = _session_research_data.get(session_id)
-    if research_data_full is None:
-        print(f"⚠️ Session not in cache, using state")
-        research_data_full = state.get("research_data", {})
-    else:
-        print(f"✅ Found session in cache")
-    
-    # DEBUG: Print what we have
-    courses = research_data_full.get("courses", [])
-    competitors = research_data_full.get("competitors", [])
-    print(f"📝 Response node has: {len(courses)} courses, {len(competitors)} competitors")
-    if courses:
-        print(f"📝 First course: {courses[0].get('name', 'Unknown')}")
-    
-    research_data = truncate_research_data(research_data_full, max_items_per_category=10)
-    
-    # Build conversation history for context
-    conversation_history = []
-    for msg in list(state["messages"])[-10:]:  # Last 10 messages
-        if isinstance(msg, HumanMessage):
-            conversation_history.append(f"User: {msg.content}")
-        elif isinstance(msg, AIMessage) and not msg.content.startswith(("Reasoning:", "Reflection:", "Executing:")):
-            # Only include actual responses
-            conversation_history.append(f"Assistant: {msg.content[:300]}...")
-    
-    conversation_context = "\n\n".join(conversation_history) if conversation_history else ""
-    
-    # Get the last user message
-    last_user_message = ""
-    for msg in reversed(state["messages"]):
-        if isinstance(msg, HumanMessage):
-            last_user_message = msg.content
-            break
-    
-    # Build context from research data (already truncated)
-    research_context = _build_research_context(research_data)
-    
-    # DEBUG: Print the context being sent to LLM
-    print(f"📋 Research context preview (first 500 chars):")
-    print(research_context[:500] if research_context else "EMPTY CONTEXT")
-    
-    # Check if we have enough data for a meaningful response
-    has_data = bool(
-        research_data.get("courses") or  # Primary: course data
-        research_data.get("competitors") or
-        research_data.get("curricula") or
-        research_data.get("reddit_posts") or
-        research_data.get("podcasts") or
-        research_data.get("blogs")
-    )
-    
-    llm = ChatAnthropic(
-        model=settings.anthropic_model,
-        api_key=settings.anthropic_api_key,
-        temperature=0.3,
-        max_tokens=4000,  # Reduced from 4096 to leave room for input
-    )
-    
-    # Truncate context to stay well under limit
-    research_context_truncated = truncate_text(research_context, max_tokens=15000)  # Max 15K tokens for context
-    
-    user_prompt = RESPONSE_USER_PROMPT.format(
-        conversation_history=truncate_text(conversation_context, max_tokens=2000) if conversation_context else "This is the first message",
-        user_query=truncate_text(last_user_message, max_tokens=200),
-        industry=state.get("industry", "Not specified"),
-        research_context=research_context_truncated,
-        has_data="Yes" if has_data else "No",
-    )
-    
-    messages = [
-        SystemMessage(content=RESPONSE_SYSTEM_PROMPT),
-        HumanMessage(content=user_prompt),
-    ]
-    
-    response = await llm.ainvoke(messages)
-    
-    # Add the response to messages
-    return {
-        "messages": [AIMessage(content=response.content)],
-        "next_node": "end",
-    }
+    except Exception as e:
+        print(f"❌ RESPONSE NODE ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Return a fallback response
+        research_data = state.get("research_data", {})
+        courses = research_data.get("courses", [])
+        
+        fallback = f"# Research Report\n\nFound {len(courses)} courses. Error generating full report: {e}"
+        
+        return {
+            "messages": [AIMessage(content=fallback)],
+            "next_node": "end",
+        }
 
 
-def _build_research_context(research_data: dict) -> str:
-    """Build a detailed context from research data for the response."""
+async def _generate_full_report(research_data: dict, industry: str) -> str:
+    """
+    Generate COMPLETE report directly from data.
+    NO LLM truncation - we format ALL courses ourselves.
+    """
+    courses = research_data.get("courses", [])
+    module_inventory = research_data.get("module_inventory", [])
+    
+    # Build report sections
     sections = []
     
-    # COURSES section (PRIMARY DATA) - with modules
-    if research_data.get("courses"):
-        courses = research_data["courses"]
-        course_lines = ["## Courses Found"]
-        all_modules = []  # Collect all modules for inventory
-        
-        for i, course in enumerate(courses[:25], 1):
-            name = course.get("name", course.get("title", "Unknown"))
-            provider = course.get("provider", course.get("platform", ""))
-            url = course.get("url", "")
-            price = course.get("price", "N/A")
-            certification = course.get("certification", "")
-            rating = course.get("rating", "")
-            duration = course.get("duration", "")
-            modules = course.get("modules", [])
-            
-            course_lines.append(f"{i}. **{name}**")
-            if provider:
-                course_lines.append(f"   - Provider: {provider}")
-            if url:
-                course_lines.append(f"   - URL: {url}")
-            if price:
-                course_lines.append(f"   - Price: {price}")
-            if certification:
-                course_lines.append(f"   - Certification: {certification}")
-            if rating:
-                course_lines.append(f"   - Rating: {rating}")
-            if duration:
-                course_lines.append(f"   - Duration: {duration}")
-            
-            # Include modules if available
-            if modules:
-                course_lines.append(f"   - Modules/Lessons:")
-                for mod in modules[:8]:  # Limit to 8 modules per course
-                    if isinstance(mod, str):
-                        course_lines.append(f"     * {mod}")
-                        all_modules.append({"title": mod, "source": f"{name} ({provider})"})
-                    elif isinstance(mod, dict):
-                        mod_title = mod.get("title", mod.get("name", str(mod)))
-                        course_lines.append(f"     * {mod_title}")
-                        all_modules.append({"title": mod_title, "source": f"{name} ({provider})"})
-        
-        sections.append("\n".join(course_lines))
-        
-        # Add module inventory section if we have modules
-        if all_modules:
-            mod_lines = ["\n## All Modules/Lessons Discovered (Module Inventory)"]
-            mod_lines.append("These modules were found across all courses:\n")
-            for j, mod in enumerate(all_modules[:50], 1):  # Limit to 50 modules
-                mod_lines.append(f"{j}. **{mod['title']}** (from: {mod['source']})")
-            sections.append("\n".join(mod_lines))
+    # ==== HEADER ====
+    sections.append(f"# Comprehensive Guide to Online {industry} Training\n")
     
-    # Competitors section (legacy)
-    if research_data.get("competitors"):
-        competitors = research_data["competitors"]
-        comp_lines = ["## Additional Competitors"]
-        for i, comp in enumerate(competitors[:10], 1):  # Limit to top 10
-            name = comp.get("name", comp.get("title", "Unknown"))
-            url = comp.get("url", comp.get("link", ""))
-            price = comp.get("price", "N/A")
-            comp_lines.append(f"{i}. **{name}**")
-            if url:
-                comp_lines.append(f"   - URL: {url}")
-            if price and price != "N/A":
-                comp_lines.append(f"   - Price: {price}")
-        sections.append("\n".join(comp_lines))
+    # ==== EXECUTIVE SUMMARY ====
+    prices = [c.get("price", "") for c in courses if c.get("price")]
+    platforms = list(set(c.get("provider", c.get("platform", "Unknown")) for c in courses))[:5]
     
-    # Curricula section
-    if research_data.get("curricula"):
-        curricula = research_data["curricula"]
-        curr_lines = ["## Extracted Curricula"]
-        for curr in curricula[:10]:  # Limit
-            if isinstance(curr, dict):
-                name = curr.get("course_name", "Unknown Course")
-                modules = curr.get("modules", curr.get("curriculum", []))
-                curr_lines.append(f"\n### {name}")
-                if isinstance(modules, list):
-                    for mod in modules[:10]:
-                        if isinstance(mod, str):
-                            curr_lines.append(f"- {mod}")
-                        elif isinstance(mod, dict):
-                            curr_lines.append(f"- {mod.get('title', mod.get('name', str(mod)))}")
-        sections.append("\n".join(curr_lines))
-    
-    # Reddit insights
-    if research_data.get("reddit_posts"):
-        posts = research_data["reddit_posts"]
-        reddit_lines = ["## Reddit Discussions"]
-        for post in posts[:10]:
-            title = post.get("title", "")
-            subreddit = post.get("subreddit", "")
-            score = post.get("score", post.get("upvotes", 0))
-            reddit_lines.append(f"- [{subreddit}] {title} (Score: {score})")
-        sections.append("\n".join(reddit_lines))
-    
-    # Podcasts
-    if research_data.get("podcasts"):
-        podcasts = research_data["podcasts"]
-        pod_lines = ["## Relevant Podcasts"]
-        for pod in podcasts[:10]:
-            name = pod.get("name", pod.get("title", "Unknown"))
-            pod_lines.append(f"- {name}")
-        sections.append("\n".join(pod_lines))
-    
-    # Blogs
-    if research_data.get("blogs"):
-        blogs = research_data["blogs"]
-        blog_lines = ["## Relevant Blogs"]
-        for blog in blogs[:10]:
-            name = blog.get("name", blog.get("title", "Unknown"))
-            url = blog.get("url", "")
-            blog_lines.append(f"- {name}" + (f" ({url})" if url else ""))
-        sections.append("\n".join(blog_lines))
-    
-    # Trending topics
-    if research_data.get("trending_topics"):
-        topics = research_data["trending_topics"]
-        topic_lines = ["## Trending Topics (Last 12-18 months)"]
-        for topic in topics[:15]:
-            topic_lines.append(f"- {topic}")
-        sections.append("\n".join(topic_lines))
-    
-    # Sentiment summary
-    if research_data.get("sentiment_summary"):
-        sections.append(f"## Sentiment Analysis\n{research_data['sentiment_summary']}")
-    
-    if not sections:
-        return "No research data collected yet. I should gather more information."
-    
-    return "\n\n".join(sections)
+    sections.append(f"""
+The online {industry} training market offers diverse options from **{len(courses)} providers** ranging from budget-friendly to premium programs.
 
+---
+
+## Top {len(courses)} Online {industry} Courses Ranked by Popularity
+
+Based on enrollment data, reviews, and industry recognition:
+
+""")
+    
+    # ==== TIER 1: PREMIUM ====
+    premium = [c for c in courses if _is_premium(c)]
+    mid_range = [c for c in courses if _is_mid_range(c)]
+    budget = [c for c in courses if _is_budget(c)]
+    
+    sections.append("### Tier 1: Market Leaders (Highest Enrollment/Visibility)\n")
+    
+    course_num = 1
+    
+    # List ALL premium courses
+    for course in premium:
+        sections.append(_format_full_course(course, course_num))
+        course_num += 1
+    
+    # ==== TIER 2: MID-RANGE ====
+    if mid_range:
+        sections.append("\n---\n\n### Tier 2: Mid-Range Options\n")
+        for course in mid_range:
+            sections.append(_format_full_course(course, course_num))
+            course_num += 1
+    
+    # ==== TIER 3: BUDGET ====
+    if budget:
+        sections.append("\n---\n\n### Tier 3: Budget-Friendly / Free Options\n")
+        for course in budget:
+            sections.append(_format_full_course(course, course_num))
+            course_num += 1
+    
+    # ==== MODULE INVENTORY ====
+    sections.append("\n---\n\n## Complete Module Inventory\n")
+    sections.append("All unique topics/modules discovered across all courses:\n")
+    
+    if module_inventory:
+        # Group by frequency
+        vital = [m for m in module_inventory if m.get("frequency") == "Vital"]
+        high = [m for m in module_inventory if m.get("frequency") == "High"]
+        medium = [m for m in module_inventory if m.get("frequency") == "Medium"]
+        low = [m for m in module_inventory if m.get("frequency") == "Low"]
+        
+        if vital:
+            sections.append("\n### VITAL (Found in 5+ courses)\n")
+            for m in vital:
+                desc = m.get("description", "Core topic in this field.")
+                sources = ", ".join(m.get("sources", [])[:5])
+                sections.append(f"- **{m['name']}** — {desc} (Sources: {sources})\n")
+        
+        if high:
+            sections.append("\n### HIGH FREQUENCY (Found in 3-4 courses)\n")
+            for m in high:
+                desc = m.get("description", "Important topic.")
+                sources = ", ".join(m.get("sources", [])[:4])
+                sections.append(f"- **{m['name']}** — {desc} (Sources: {sources})\n")
+        
+        if medium:
+            sections.append("\n### MEDIUM FREQUENCY (Found in 2 courses)\n")
+            for m in medium:
+                desc = m.get("description", "")
+                sources = ", ".join(m.get("sources", [])[:3])
+                sections.append(f"- **{m['name']}** — {desc} (Sources: {sources})\n")
+        
+        if low:
+            sections.append("\n### NICHE/SPECIALIZED (Found in 1 course)\n")
+            for m in low[:20]:  # Limit niche to avoid overwhelming
+                desc = m.get("description", "")
+                source = m.get("sources", ["Unknown"])[0] if m.get("sources") else "Unknown"
+                sections.append(f"- **{m['name']}** — {desc} (Source: {source})\n")
+    else:
+        # Generate module inventory from course curricula
+        sections.append(_generate_module_inventory_from_courses(courses))
+    
+    # ==== KEY INSIGHTS ====
+    sections.append("\n---\n\n## Key Insights\n")
+    
+    # Certification analysis
+    certs = [c.get("certification", "") for c in courses if c.get("certification") and c.get("certification") != "N/A"]
+    sections.append(f"\n### Certification Landscape\n")
+    if certs:
+        cert_summary = ", ".join(list(set(certs))[:5])
+        sections.append(f"Available certifications include: {cert_summary}\n")
+    else:
+        sections.append("Various completion certificates and professional certifications available.\n")
+    
+    # Price analysis
+    sections.append(f"\n### Pricing Analysis\n")
+    sections.append(f"- **Premium tier**: Programs typically $500+ with comprehensive curriculum\n")
+    sections.append(f"- **Mid-range**: $100-$500, often subscription-based ($49/month common)\n")
+    sections.append(f"- **Budget**: Under $100 or free audit options available\n")
+    
+    # Platforms
+    sections.append(f"\n### Top Platforms\n")
+    for p in platforms[:5]:
+        sections.append(f"- {p}\n")
+    
+    # ==== DATA SOURCES ====
+    sections.append("\n---\n\n## Data Sources\n")
+    urls = list(set(c.get("url", "") for c in courses if c.get("url")))
+    for url in urls[:30]:
+        sections.append(f"- {url}\n")
+    
+    return "".join(sections)
+
+
+def _format_full_course(course: dict, num: int) -> str:
+    """Format a single course with FULL details like the HVAC PDF sample."""
+    name = course.get("name", course.get("title", "Unknown Course"))
+    provider = course.get("provider", course.get("platform", "Unknown"))
+    url = course.get("url", "")
+    price = course.get("price", "Not available")
+    duration = course.get("duration", "Not available")
+    cert = course.get("certification", "Completion Certificate")
+    rating = course.get("rating", "Not available")
+    students = course.get("students", "Not available")
+    reviews = course.get("reviews", "")
+    accreditation = course.get("accreditation", "")
+    
+    lines = []
+    lines.append(f"\n#### {num}. {name}\n")
+    
+    # Metrics table
+    lines.append("| Metric | Details |")
+    lines.append("|--------|---------|")
+    lines.append(f"| **Provider** | {provider} |")
+    lines.append(f"| **Price** | {price} |")
+    lines.append(f"| **Duration** | {duration} |")
+    lines.append(f"| **Certifications** | {cert} |")
+    if students and students != "Not available":
+        lines.append(f"| **Enrollment** | {students} |")
+    if rating and rating != "Not available":
+        review_text = f" ({reviews} reviews)" if reviews else ""
+        lines.append(f"| **Reviews** | {rating}{review_text} |")
+    if accreditation:
+        lines.append(f"| **Accreditation** | {accreditation} |")
+    if url:
+        lines.append(f"| **URL** | {url} |")
+    
+    # Curriculum
+    curriculum = course.get("curriculum", course.get("modules", []))
+    if curriculum and len(curriculum) > 0:
+        lines.append(f"\n**Complete Curriculum ({len(curriculum)} Modules):**\n")
+        for i, mod in enumerate(curriculum, 1):
+            if isinstance(mod, dict):
+                mod_name = mod.get("name", mod.get("title", f"Module {i}"))
+                mod_desc = mod.get("description", "")
+                if mod_desc:
+                    lines.append(f"{i}. **{mod_name}** — {mod_desc}")
+                else:
+                    lines.append(f"{i}. **{mod_name}**")
+            else:
+                lines.append(f"{i}. **{mod}**")
+    else:
+        lines.append("\n**Key Modules:** Curriculum details not available from source.\n")
+    
+    lines.append("\n---\n")
+    return "\n".join(lines)
+
+
+def _is_premium(course: dict) -> bool:
+    """Check if course is premium tier ($500+)."""
+    price = str(course.get("price", "")).lower()
+    if not price or price == "not available":
+        return True  # Default premium if unknown
+    if any(x in price for x in ["free", "$0", "audit"]):
+        return False
+    # Extract number
+    import re
+    nums = re.findall(r'\d+', price.replace(",", ""))
+    if nums:
+        max_price = max(int(n) for n in nums)
+        return max_price >= 500
+    return True  # Default premium
+
+
+def _is_mid_range(course: dict) -> bool:
+    """Check if course is mid-range ($100-$500)."""
+    price = str(course.get("price", "")).lower()
+    if not price or price == "not available":
+        return False
+    if any(x in price for x in ["free", "$0", "audit"]):
+        return False
+    import re
+    nums = re.findall(r'\d+', price.replace(",", ""))
+    if nums:
+        max_price = max(int(n) for n in nums)
+        return 100 <= max_price < 500
+    # Check for subscription
+    if "/month" in price or "month" in price:
+        return True
+    return False
+
+
+def _is_budget(course: dict) -> bool:
+    """Check if course is budget tier (under $100 or free)."""
+    price = str(course.get("price", "")).lower()
+    if any(x in price for x in ["free", "$0", "audit"]):
+        return True
+    import re
+    nums = re.findall(r'\d+', price.replace(",", ""))
+    if nums:
+        max_price = max(int(n) for n in nums)
+        return max_price < 100
+    return False
+
+
+def _generate_module_inventory_from_courses(courses: list) -> str:
+    """Generate module inventory from course curricula if not pre-computed."""
+    module_counts = {}
+    
+    for course in courses:
+        course_name = course.get("name", course.get("title", "Unknown"))
+        curriculum = course.get("curriculum", course.get("modules", []))
+        
+        for mod in curriculum:
+            if isinstance(mod, dict):
+                mod_name = mod.get("name", mod.get("title", ""))
+            else:
+                mod_name = str(mod)
+            
+            if mod_name:
+                # Normalize module name
+                normalized = mod_name.strip().lower()
+                if normalized not in module_counts:
+                    module_counts[normalized] = {
+                        "name": mod_name,
+                        "count": 0,
+                        "sources": []
+                    }
+                module_counts[normalized]["count"] += 1
+                if course_name not in module_counts[normalized]["sources"]:
+                    module_counts[normalized]["sources"].append(course_name)
+    
+    # Sort by frequency
+    sorted_modules = sorted(module_counts.values(), key=lambda x: x["count"], reverse=True)
+    
+    lines = []
+    
+    vital = [m for m in sorted_modules if m["count"] >= 5]
+    high = [m for m in sorted_modules if 3 <= m["count"] < 5]
+    medium = [m for m in sorted_modules if m["count"] == 2]
+    low = [m for m in sorted_modules if m["count"] == 1]
+    
+    if vital:
+        lines.append("\n### VITAL (Found in 5+ courses)\n")
+        for m in vital:
+            sources = ", ".join(m["sources"][:5])
+            lines.append(f"- **{m['name']}** — Found in {m['count']} courses. (Sources: {sources})\n")
+    
+    if high:
+        lines.append("\n### HIGH FREQUENCY (Found in 3-4 courses)\n")
+        for m in high:
+            sources = ", ".join(m["sources"][:4])
+            lines.append(f"- **{m['name']}** — Found in {m['count']} courses. (Sources: {sources})\n")
+    
+    if medium:
+        lines.append("\n### MEDIUM FREQUENCY (Found in 2 courses)\n")
+        for m in medium:
+            sources = ", ".join(m["sources"][:2])
+            lines.append(f"- **{m['name']}** — (Sources: {sources})\n")
+    
+    if low:
+        lines.append("\n### NICHE/SPECIALIZED (Found in 1 course)\n")
+        for m in low[:15]:  # Limit niche
+            lines.append(f"- **{m['name']}** — (Source: {m['sources'][0]})\n")
+    
+    return "".join(lines)

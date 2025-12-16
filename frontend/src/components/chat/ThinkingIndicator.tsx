@@ -5,6 +5,15 @@ interface ThinkingIndicatorProps {
 }
 
 export function ThinkingIndicator({ status }: ThinkingIndicatorProps) {
+  // Parse status for step info and remove trailing dots
+  const stepMatch = status.match(/\(Step (\d+)\)/);
+  const stepNum = stepMatch ? stepMatch[1] : null;
+  // Remove step info AND trailing dots (...)
+  const cleanStatus = status
+    .replace(/\s*\(Step \d+\)/, "")
+    .replace(/\.{2,}$/, "") // Remove 2+ trailing dots
+    .trim();
+  
   return (
     <div className="flex gap-4 max-w-4xl mx-auto">
       {/* Avatar */}
@@ -27,15 +36,22 @@ export function ThinkingIndicator({ status }: ThinkingIndicatorProps) {
       {/* Thinking Content */}
       <div className="flex-1">
         <div className="inline-flex items-center gap-3 px-4 py-3 bg-background-secondary rounded-2xl rounded-tl-sm">
-          {/* Animated dots */}
+          {/* Original animated dots */}
           <div className="flex gap-1">
             <span className="thinking-dot w-2 h-2 bg-accent-primary rounded-full"></span>
             <span className="thinking-dot w-2 h-2 bg-accent-primary rounded-full"></span>
             <span className="thinking-dot w-2 h-2 bg-accent-primary rounded-full"></span>
           </div>
 
-          {/* Status text */}
-          <span className="text-text-secondary text-sm">{status}</span>
+          {/* Status text without trailing dots */}
+          <div className="flex items-center gap-2">
+            {stepNum && (
+              <span className="text-xs font-medium bg-accent-primary/20 text-accent-primary px-2 py-0.5 rounded">
+                Step {stepNum}
+              </span>
+            )}
+            <span className="text-text-secondary text-sm">{cleanStatus}</span>
+          </div>
         </div>
       </div>
     </div>

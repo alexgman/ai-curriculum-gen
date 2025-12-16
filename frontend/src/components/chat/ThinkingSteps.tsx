@@ -9,7 +9,12 @@ interface ThinkingStepsProps {
 export function ThinkingSteps({ steps }: ThinkingStepsProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  if (steps.length === 0) return null;
+  // Filter out reflection messages - only show reasoning steps
+  const filteredSteps = steps.filter(
+    (step) => !step.toLowerCase().startsWith("reflection:")
+  );
+
+  if (filteredSteps.length === 0) return null;
 
   return (
     <div className="mb-4 border border-zinc-700 rounded-lg bg-background-tertiary">
@@ -33,13 +38,13 @@ export function ThinkingSteps({ steps }: ThinkingStepsProps) {
               d="M9 5l7 7-7 7"
             />
           </svg>
-          <span className="font-medium">{steps.length} reasoning steps</span>
+          <span className="font-medium">{filteredSteps.length} reasoning steps</span>
         </span>
       </button>
 
       {isExpanded && (
         <div className="px-4 pb-3 space-y-1.5 border-l-2 border-accent-primary/30 ml-4">
-          {steps.map((step, index) => (
+          {filteredSteps.map((step, index) => (
             <div
               key={index}
               className="text-sm text-text-secondary pl-4 py-1"

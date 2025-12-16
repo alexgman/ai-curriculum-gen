@@ -60,6 +60,16 @@ async def chat(request: ChatRequest):
     # Create or use existing session
     session_id = request.session_id or str(uuid.uuid4())
     
+    # Debug: Log session info
+    from app.graph.nodes.reflection import _session_research_data
+    print(f"🔗 Chat request - session_id from client: {request.session_id}")
+    print(f"🔗 Using session_id: {session_id}")
+    print(f"📊 Active sessions in memory: {len(_conversation_store)} conversations, {len(_session_research_data)} research datasets")
+    if session_id in _session_research_data:
+        print(f"✅ Found existing research data: {len(_session_research_data[session_id].get('courses', []))} courses")
+    else:
+        print(f"⚠️ No existing research data for session {session_id[:8] if session_id else 'None'}")
+    
     async def event_generator():
         """Generate SSE events from agent execution with real-time updates."""
         try:
@@ -75,6 +85,12 @@ async def chat(request: ChatRequest):
             state = create_initial_state(session_id)
             state["messages"] = list(_conversation_store[session_id])  # All previous messages
             
+            # IMPORTANT: Load existing research data for follow-up questions
+            from app.graph.nodes.reflection import _session_research_data
+            if session_id in _session_research_data:
+                state["research_data"] = _session_research_data[session_id]
+                print(f"📂 Loaded existing research data for session {session_id[:8]}: {len(state['research_data'].get('courses', []))} courses")
+            
             # Setup progress queue for this session
             progress_queue: asyncio.Queue = asyncio.Queue()
             _progress_queues[session_id] = progress_queue
@@ -88,92 +104,148 @@ async def chat(request: ChatRequest):
             # Send session info immediately
             yield f"data: {json.dumps({'type': 'session', 'session_id': session_id})}\n\n"
             
-            # Send initial thinking status immediately
-            yield f"data: {json.dumps({'type': 'thinking', 'status': 'Starting research...', 'step': 0})}\n\n"
+            # Send initial thinking status immediately (no trailing dots)
+            yield f"data: {json.dumps({'type': 'thinking', 'status': 'Starting research', 'step': 0})}\n\n"
             await asyncio.sleep(0.02)
             
             step_count = 0
             last_node = None
             final_response_content = ""  # Track the final response
             
-            # Stream through the graph with immediate updates
-            async for event in research_graph.astream(state):
-                # Check for progress updates from tools
-                while not progress_queue.empty():
-                    try:
-                        progress_msg = progress_queue.get_nowait()
-                        yield f"data: {json.dumps({'type': 'thinking', 'status': progress_msg, 'step': step_count})}\n\n"
-                        await asyncio.sleep(0.01)
-                    except asyncio.QueueEmpty:
+            # Create a shared queue for ALL SSE events
+            event_queue = asyncio.Queue()
+            graph_complete = False
+            
+            # Run graph in background task
+            async def run_graph():
+                """Run the graph and put events into the queue."""
+                nonlocal graph_complete, step_count
+                try:
+                    async for event in research_graph.astream(state):
+                        for node_name, node_output in event.items():
+                            step_count += 1
+                            await event_queue.put(("graph", node_name, node_output, step_count))
+                except Exception as e:
+                    print(f"❌ Graph error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    await event_queue.put(("error", str(e), None, 0))
+                finally:
+                    graph_complete = True
+                    await event_queue.put(("done", None, None, 0))
+            
+            # Run progress/keepalive in background
+            async def run_keepalive():
+                """Send keepalive and progress messages."""
+                last_keepalive = asyncio.get_event_loop().time()
+                while not graph_complete:
+                    # Check for progress messages
+                    while not progress_queue.empty():
+                        try:
+                            msg = progress_queue.get_nowait()
+                            await event_queue.put(("progress", msg, None, step_count))
+                        except asyncio.QueueEmpty:
+                            break
+                    
+                    # Send keepalive every 15 seconds
+                    now = asyncio.get_event_loop().time()
+                    if now - last_keepalive > 15:
+                        await event_queue.put(("keepalive", now, None, 0))
+                        last_keepalive = now
+                    
+                    await asyncio.sleep(0.3)
+            
+            # Start both tasks
+            graph_task = asyncio.create_task(run_graph())
+            keepalive_task = asyncio.create_task(run_keepalive())
+            
+            # Main loop - yield events from queue
+            while True:
+                try:
+                    # Wait for next event with timeout
+                    event_type, data, extra, step = await asyncio.wait_for(
+                        event_queue.get(), 
+                        timeout=2.0  # Check every 2 seconds for timeout
+                    )
+                    
+                    if event_type == "done":
                         break
-                # Process each event from the graph
-                for node_name, node_output in event.items():
-                    step_count += 1
-                    
-                    # Send immediate thinking status BEFORE processing
-                    if node_name == "reasoning":
-                        yield f"data: {json.dumps({'type': 'thinking', 'status': 'Planning next action...', 'step': step_count})}\n\n"
+                    elif event_type == "error":
+                        yield f"data: {json.dumps({'type': 'error', 'message': data})}\n\n"
+                        break
+                    elif event_type == "keepalive":
+                        yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': data})}\n\n"
+                        await asyncio.sleep(0.01)
+                    elif event_type == "progress":
+                        yield f"data: {json.dumps({'type': 'thinking', 'status': data, 'step': step})}\n\n"
+                        await asyncio.sleep(0.01)
+                    elif event_type == "graph":
+                        node_name, node_output = data, extra
+                        
+                        # Process graph event - send thinking status (NO EMOJIS)
+                        if node_name == "reasoning":
+                            yield f"data: {json.dumps({'type': 'thinking', 'status': 'Planning next action', 'step': step})}\n\n"
+                        elif node_name == "tool_executor":
+                            tool_call = node_output.get("current_tool_call") or state.get("current_tool_call")
+                            tool_name = tool_call.get("name", "tool") if tool_call else "tool"
+                            yield f"data: {json.dumps({'type': 'thinking', 'status': f'Executing {tool_name}', 'tool': tool_name, 'step': step})}\n\n"
+                        elif node_name == "reflection":
+                            yield f"data: {json.dumps({'type': 'thinking', 'status': 'Validating results', 'step': step})}\n\n"
+                        elif node_name == "response":
+                            yield f"data: {json.dumps({'type': 'thinking', 'status': 'Generating report', 'step': step})}\n\n"
+                            print(f"RESPONSE NODE OUTPUT: {list(node_output.keys())}")
+                        
                         await asyncio.sleep(0.02)
-                    elif node_name == "tool_executor":
-                        tool_call = node_output.get("current_tool_call") or state.get("current_tool_call")
-                        tool_name = tool_call.get("name", "tool") if tool_call else "tool"
-                        yield f"data: {json.dumps({'type': 'thinking', 'status': f'Executing {tool_name}...', 'tool': tool_name, 'step': step_count})}\n\n"
-                        await asyncio.sleep(0.02)
-                    elif node_name == "reflection":
-                        yield f"data: {json.dumps({'type': 'thinking', 'status': 'Validating results...', 'step': step_count})}\n\n"
-                        await asyncio.sleep(0.02)
-                    elif node_name == "response":
-                        yield f"data: {json.dumps({'type': 'thinking', 'status': 'Generating response...', 'step': step_count})}\n\n"
-                        await asyncio.sleep(0.02)
-                    
-                    # Build node event data
-                    event_data = {
-                        "type": "node",
-                        "node": node_name,
-                        "step": step_count,
-                    }
-                    
-                    # Extract relevant info from node output
-                    if "messages" in node_output:
-                        messages = node_output["messages"]
-                        for msg in messages:
-                            if isinstance(msg, AIMessage):
-                                if msg.content:
+                        
+                        # Build and send node event
+                        event_data = {"type": "node", "node": node_name, "step": step}
+                        
+                        if "messages" in node_output:
+                            for msg in node_output["messages"]:
+                                if isinstance(msg, AIMessage) and msg.content:
                                     event_data["content"] = msg.content
-                                    # Track final response (from response node, not internal messages)
-                                    if node_name == "response" and not msg.content.startswith(("Reasoning:", "Reflection:")):
-                                        final_response_content = msg.content
-                    
-                    # Include reasoning explanation if available
-                    if "reasoning_explanation" in node_output:
-                        event_data["reasoning"] = node_output["reasoning_explanation"]
-                    
-                    # Include reflection explanation if available
-                    if "reflection_explanation" in node_output:
-                        event_data["reflection"] = node_output["reflection_explanation"]
-                    
-                    if "current_tool_call" in node_output and node_output["current_tool_call"]:
-                        tool_call = node_output["current_tool_call"]
-                        event_data["tool_call"] = {
-                            "name": tool_call.get("name"),
-                            "arguments": tool_call.get("arguments", {}),
-                        }
-                    
-                    if "current_tool_result" in node_output and node_output["current_tool_result"]:
-                        result = node_output["current_tool_result"]
-                        event_data["tool_result"] = {
-                            "name": result.get("tool_name"),
-                            "success": result.get("success"),
-                        }
-                    
-                    if "research_data" in node_output:
-                        event_data["research_summary"] = _summarize_research(node_output["research_data"])
-                    
-                    # Send node event immediately
-                    yield f"data: {json.dumps(event_data)}\n\n"
-                    await asyncio.sleep(0.02)  # Ensure event is flushed
-                    
-                    last_node = node_name
+                                    # Track final response from response node only
+                                    if node_name == "response":
+                                        is_status = msg.content.startswith(("Reasoning:", "Reflection:", "Found", "Searching", "Analyzing"))
+                                        if not is_status and len(msg.content) > 500:  # Real reports are long
+                                            final_response_content = msg.content
+                                            print(f"CAPTURED FINAL RESPONSE: {len(final_response_content)} chars")
+                                            # IMMEDIATELY send final_response event - don't wait
+                                            yield f"data: {json.dumps({'type': 'final_response', 'content': final_response_content})}\n\n"
+                                            await asyncio.sleep(0.1)  # Ensure it's flushed
+                        
+                        if "reasoning_explanation" in node_output:
+                            event_data["reasoning"] = node_output["reasoning_explanation"]
+                        if "reflection_explanation" in node_output:
+                            event_data["reflection"] = node_output["reflection_explanation"]
+                        if "current_tool_call" in node_output and node_output["current_tool_call"]:
+                            event_data["tool_call"] = {"name": node_output["current_tool_call"].get("name")}
+                        if "current_tool_result" in node_output and node_output["current_tool_result"]:
+                            event_data["tool_result"] = {"success": node_output["current_tool_result"].get("success")}
+                        if "research_data" in node_output:
+                            event_data["research_summary"] = _summarize_research(node_output["research_data"])
+                        
+                        event_json = json.dumps(event_data)
+                        print(f"📤 Sending {node_name}: {len(event_json)} bytes, has_content={bool(event_data.get('content'))}")
+                        yield f"data: {event_json}\n\n"
+                        await asyncio.sleep(0.02)
+                        
+                        last_node = node_name
+                
+                except asyncio.TimeoutError:
+                    # No events for 2 seconds - send a ping to keep connection alive
+                    if not graph_complete:
+                        yield f"data: {json.dumps({'type': 'ping'})}\n\n"
+                        await asyncio.sleep(0.01)
+                    else:
+                        break
+            
+            # Cleanup
+            keepalive_task.cancel()
+            try:
+                await keepalive_task
+            except asyncio.CancelledError:
+                pass
             
             # Cleanup progress callback
             set_progress_callback(None)
@@ -184,7 +256,9 @@ async def chat(request: ChatRequest):
             if final_response_content:
                 assistant_message = AIMessage(content=final_response_content)
                 _conversation_store[session_id].append(assistant_message)
-                print(f"📝 Saved response to session {session_id}. History now has {len(_conversation_store[session_id])} messages.")
+                print(f"Saved response to session {session_id}. History now has {len(_conversation_store[session_id])} messages.")
+            else:
+                print("WARNING: No final response content captured!")
             
             # Send completion event
             yield f"data: {json.dumps({'type': 'complete', 'session_id': session_id, 'total_steps': step_count})}\n\n"

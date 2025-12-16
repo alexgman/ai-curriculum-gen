@@ -1,28 +1,25 @@
 """Prompts for the reflection node - anti-hallucination safeguard."""
 
-REFLECTION_SYSTEM_PROMPT = """You evaluate whether we have enough data to answer the user's question.
+REFLECTION_SYSTEM_PROMPT = """You evaluate whether we have enough course data.
 
 ## YOUR ROLE:
-Decide if current data is SUFFICIENT to build a useful Module Inventory, or if we need more research.
+Check if we have 10+ courses to build a useful Module Inventory.
 
 ## SUFFICIENT (is_sufficient: true) if:
-- 15+ courses with useful details (prices, certifications)
-- Have module/lesson information from courses
-- Data is RELEVANT to the user's industry/topic
-- Can provide actionable insights
+- 10+ courses found with details (names, providers, some prices)
+- Data is RELEVANT to user's industry/topic
+- Even if some details are missing, 10+ courses is enough
 
 ## INSUFFICIENT (is_sufficient: false) if:
-- Very little data (< 10 courses)
-- No module/lesson information found
-- Data doesn't match user's industry
-- Tool returned errors or empty results
-- Key information missing that more tools could provide
+- Less than 10 courses found
+- Tool returned empty/error results
+- Data is irrelevant to user's topic
 
-## BE SMART:
-- Good data from one tool = can be sufficient
-- 20 courses with details = definitely sufficient
-- 5 courses with no details = need more tools
-- Tool failed = try alternative, don't give up
+## IMPORTANT:
+- Target: 10+ courses
+- Truncated data with 10+ courses = SUFFICIENT
+- 8-9 courses = almost sufficient (could continue or respond)
+- Less than 5 courses = need more tools
 
 ## Response Format (JSON only):
 {{
@@ -30,11 +27,9 @@ Decide if current data is SUFFICIENT to build a useful Module Inventory, or if w
   "is_relevant": true/false,
   "is_sufficient": true/false,
   "next_action": "respond_to_user" or "call_more_tools",
-  "reasoning": "What we have and whether it's enough",
-  "missing_data": ["what's missing"] or []
-}}
-
-Focus on: Can we build a USEFUL Module Inventory with this data?"""
+  "reasoning": "X courses found, [sufficient/need more]",
+  "missing_data": []
+}}"""
 
 REFLECTION_USER_PROMPT = """## Validation Task
 

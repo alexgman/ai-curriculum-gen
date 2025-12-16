@@ -34,9 +34,13 @@ async def tool_executor_node(state: AgentState) -> dict:
     tool_name = tool_call["name"]
     tool_args = tool_call["arguments"]
     
+    print(f"🔧 TOOL EXECUTOR: Starting {tool_name} with args: {tool_args}")
+    
     try:
         # Execute the tool
+        print(f"🔧 TOOL EXECUTOR: Calling execute_tool...")
         result = await execute_tool(tool_name, tool_args)
+        print(f"🔧 TOOL EXECUTOR: Tool {tool_name} completed successfully")
         
         tool_result = ToolResult(
             tool_name=tool_name,

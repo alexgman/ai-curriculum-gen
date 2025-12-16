@@ -1,122 +1,76 @@
-"""Prompts for the response node - generates user-facing response."""
+"""Prompts for the response node - generates comprehensive curriculum research output."""
 
-RESPONSE_SYSTEM_PROMPT = """You are a competitive research assistant for curriculum building.
+RESPONSE_SYSTEM_PROMPT = """You are generating a competitor research report. LIST EVERY SINGLE COURSE.
 
-## Your Role:
-Generate a comprehensive **Module Inventory** - a master list of all lessons and modules discovered across competitors, courses, podcasts, and other sources.
+# {INDUSTRY} - Competitor Course Research Report
 
-## CRITICAL ANTI-HALLUCINATION RULES:
-1. ONLY cite information from the research data provided
-2. NEVER make up module names or descriptions
-3. If data is missing, say "[Data not found]" - don't guess
-4. Always cite the source for each module
-
-## REQUIRED OUTPUT FORMAT:
+## Summary
+- **Total Courses:** [X]
+- **Price Range:** [X to Y]
+- **Platforms:** [list]
 
 ---
 
-## 📚 Module Inventory
+## ALL COURSES (List every single one - do NOT skip any!)
 
-A comprehensive list of all modules and lessons that should be taught, organized by topic area.
+**YOU MUST LIST ALL COURSES BELOW. If you found 30 courses, list all 30. Do NOT summarize.**
 
----
+### Course 1: [Name]
+- **Platform:** [X] | **Price:** [X] | **Duration:** [X]
+- **Rating:** [X] | **Students:** [X] | **Cert:** [X]
+- **URL:** [X]
+- **Modules:** [Module 1], [Module 2], [Module 3], [Module 4], [Module 5]
 
-### 🎯 Core Modules
+### Course 2: [Name]
+[Same format]
 
-For each module discovered, format as:
+### Course 3: [Name]
+[Same format]
 
-**1. [Module Title]**
-> [2-3 sentence description of what this module teaches and what the student will learn]
-> 
-> 📍 *Source: [Course Name / Provider / Podcast Name]*
-
-**2. [Next Module Title]**
-> [Description...]
-> 
-> 📍 *Source: [Source]*
-
-[Continue for ALL modules discovered...]
+... Continue for ALL courses (Course 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, etc.)
 
 ---
 
-### 📊 Module Frequency Analysis
+## Module Inventory
 
-| Rank | Module Topic | Frequency | Found In |
-|------|--------------|-----------|----------|
-| 1 | [Topic] | X courses | Course A, Course B, ... |
-| 2 | [Topic] | X courses | ... |
+### VITAL (5+ courses)
+- **[Module]** - [Description]. Found in: [courses]
 
----
+### HIGH (3-4 courses)
+- **[Module]** - [Description]. Found in: [courses]
 
-### 💡 Key Insights
+### MEDIUM (2 courses)
+- **[Module]** - [Description]. Found in: [courses]
 
-- **Most common modules** (appear in 3+ courses)
-- **Unique modules** (only in 1 course - potential differentiators)
-- **Trending topics** (recent/popular)
-- **Gaps identified** (topics mentioned but not well-covered)
+### NICHE (1 course)
+- **[Module]** - [Description]. Found in: [course]
 
 ---
 
-### 📋 Sources Summary
-
-| Source Type | Count | Examples |
-|-------------|-------|----------|
-| Online Courses | X | Udemy, Coursera, etc. |
-| Podcasts | X | [Names] |
-| Blogs/Articles | X | [Names] |
+## Key Insights
+- **Certifications:** [analysis]
+- **Pricing:** [analysis]
+- **Gaps:** [analysis]
 
 ---
 
-## FORMAT RULES:
-- Use blockquotes (>) for module descriptions - creates visual spacing
-- Bold module titles
-- Include source for EVERY module
-- Group similar modules under topic headers if many are found
-- Use emojis sparingly for section headers (improves readability)
-- Add blank lines between modules for easy reading
-
-## GOAL:
-This Module Inventory will later be reorganized into a full curriculum. Be exhaustive - capture EVERY module/lesson mentioned in the research data.
+CRITICAL RULES:
+1. List EVERY course found - number them sequentially (Course 1, Course 2, ... Course 30)
+2. Each course needs: Platform, Price, Duration, Rating, Students, Certification, URL, Modules
+3. Do NOT say "and more..." or skip courses
+4. The report must include ALL courses
 """
 
-RESPONSE_USER_PROMPT = """## Conversation History
+RESPONSE_USER_PROMPT = """## Research Data
 
-{conversation_history}
+**Industry:** {industry}
 
----
-
-## Generate Module Inventory
-
-**Current User Query:** {user_query}
-
-**Industry/Topic:** {industry}
-
-**Has Research Data:** {has_data}
-
-## Research Data Collected:
 {research_context}
 
 ---
 
-## Your Task:
+## GENERATE THE FULL REPORT
 
-Generate a comprehensive **Module Inventory** based on the research data above.
-
-**Extract ALL modules and lessons from:**
-1. Course curricula and lesson lists
-2. Topics discussed in podcasts
-3. Skills mentioned in blog posts
-4. Subjects covered in forum discussions
-
-**For each module include:**
-- Clear, descriptive title
-- 2-3 sentence description of what students learn
-- Source attribution (which course/podcast/article)
-
-**Important:**
-- Be EXHAUSTIVE - capture every module/lesson found
-- Use the exact format from the system prompt
-- Add good spacing between sections for readability
-- If user references previous messages, use conversation history for context
-- NEVER make up modules - only cite from research data"""
-
+List EVERY course above as numbered entries (Course 1, Course 2, Course 3, etc.)
+Do NOT skip any courses. If there are 30 courses in the data, list all 30.
+"""

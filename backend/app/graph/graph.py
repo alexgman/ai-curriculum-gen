@@ -12,63 +12,50 @@ from app.graph.nodes import (
 def route_after_reasoning(state: AgentState) -> str:
     """Route after reasoning node based on decision."""
     next_node = state.get("next_node", "response")
+    tool_call = state.get("current_tool_call")
     
-    if next_node == "tool_executor" and state.get("current_tool_call"):
+    print(f"🔀 ROUTING (after reasoning): next_node={next_node}, has_tool_call={bool(tool_call)}")
+    
+    if next_node == "tool_executor" and tool_call:
+        print(f"✅ → TOOL_EXECUTOR (tool: {tool_call.get('name', 'unknown')})")
         return "tool_executor"
     elif next_node == "response":
+        print(f"✅ → RESPONSE")
         return "response"
     else:
         # Default to response if unclear
+        print(f"⚠️ → RESPONSE (default fallback)")
         return "response"
 
 
 def route_after_reflection(state: AgentState) -> str:
-    """Route after reflection - simple routing based on data and limits."""
-    reflection = state.get("reflection_result")
+    """
+    Route after reflection - GO TO RESPONSE after first successful tool call with data.
+    """
     research_data = state.get("research_data", {})
-    retry_count = state.get("retry_count", 0)
     tool_call_count = state.get("tool_call_count", 0)
-    
-    # Count data we have
     courses = research_data.get("courses", [])
-    podcasts = research_data.get("podcasts", [])
-    competitors = research_data.get("competitors", [])
-    total_items = len(courses) + len(podcasts) + len(competitors)
     
-    print(f"📊 Data: {len(courses)} courses, {len(podcasts)} podcasts, total={total_items}, calls={tool_call_count}")
+    print(f"🔀 ROUTING: courses={len(courses)}, tool_calls={tool_call_count}")
     
-    # 1. SAFETY LIMITS - Always respond if we hit these
-    if tool_call_count >= 4:
-        print(f"✅ Max tool calls ({tool_call_count}) - generating response")
+    # SIMPLE RULE: If we have ANY courses, go to response
+    # The discover_courses_with_rankings tool already gets 25-30 courses
+    if len(courses) > 0:
+        print(f"✅ → RESPONSE ({len(courses)} courses found)")
         return "response"
     
-    if retry_count >= 3:
-        print(f"✅ Max retries ({retry_count}) - generating response")
+    # If we've made a tool call but got no courses, try once more
+    if tool_call_count >= 2:
+        print(f"✅ → RESPONSE (max attempts, {len(courses)} courses)")
         return "response"
     
-    # 2. ENOUGH DATA - Respond if we have good data
-    if len(courses) >= 10:
-        print(f"✅ Have {len(courses)} courses - generating response")
-        return "response"
-    
-    if total_items >= 15:
-        print(f"✅ Have {total_items} total items - generating response")
-        return "response"
-    
-    # 3. REFLECTION SAYS SUFFICIENT - Respect it if we have any data
-    if reflection and reflection.get("is_sufficient") and total_items >= 3:
-        print(f"✅ Reflection says sufficient - generating response")
-        return "response"
-    
-    # 4. Continue researching
-    print(f"🔄 Need more data (have {total_items} items) - continuing")
+    # Otherwise continue research
+    print(f"🔄 → REASONING (no courses yet)")
     return "reasoning"
 
 
 def route_after_response(state: AgentState) -> str:
-    """Route after response - either end or continue conversation."""
-    # For now, always end after response
-    # In future, could check if user asked follow-up
+    """Route after response - always end."""
     return "end"
 
 
@@ -81,9 +68,6 @@ def create_research_graph():
     2. tool_executor_node: Executes the tool
     3. reflection_node: Validates result, decides if more needed
     4. response_node: Generates final response
-    
-    The loop between reasoning -> tool -> reflection continues
-    until reflection says we have enough data.
     """
     
     # Create the graph
@@ -136,4 +120,3 @@ def create_research_graph():
 
 # Create a singleton instance
 research_graph = create_research_graph()
-

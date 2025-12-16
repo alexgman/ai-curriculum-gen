@@ -200,13 +200,22 @@ export default function MainApp() {
             try {
               const data = JSON.parse(line.slice(6));
 
-              if (data.type === "thinking") {
+              // Handle session sync from backend - CRITICAL for context persistence
+              if (data.type === "session" && data.session_id) {
+                console.log(`🔗 Backend session_id received: ${data.session_id}`);
+                // If frontend has a different session_id, we need to update the backend's reference
+                // But more importantly, we need to make sure subsequent messages use the same session_id
+              } else if (data.type === "thinking") {
+                // Show detailed progress from backend tools - these are the real status updates
                 const stepInfo = data.step ? ` (Step ${data.step})` : "";
-                setSessionThinking(`${data.status || data.tool || "Processing..."}${stepInfo}`, activeSessionId || undefined);
+                const status = data.status || data.tool || "Processing";
+                setSessionThinking(`${status}${stepInfo}`, activeSessionId || undefined);
               } else if (data.type === "node") {
                 const nodeName = data.node;
                 const stepNum = data.step || thinkingMessages.length + 1;
                 
+                // Only add to thinking messages log, don't overwrite the live status
+                // The "thinking" events from backend tools have more detailed progress
                 if (nodeName === "reasoning") {
                   let reasoningText = data.reasoning || "Analyzing query and planning research strategy";
                   if (data.content) {
@@ -216,7 +225,7 @@ export default function MainApp() {
                     reasoningText = reasoningText.slice(0, 100) + "...";
                   }
                   thinkingMessages.push(`Step ${stepNum}: Planning - ${reasoningText}`);
-                  setSessionThinking(`Planning next action... (Step ${stepNum})`, activeSessionId || undefined);
+                  // Don't overwrite status - let tool progress messages show
                 } else if (nodeName === "tool_executor") {
                   const toolCall = data.tool_call;
                   if (toolCall) {
@@ -225,10 +234,10 @@ export default function MainApp() {
                     const argStr = args.query || args.url || args.industry || Object.values(args)[0] || "";
                     const shortArg = typeof argStr === 'string' ? argStr.slice(0, 40) : String(argStr).slice(0, 40);
                     thinkingMessages.push(`Step ${stepNum}: Running ${toolName}("${shortArg}")`);
-                    setSessionThinking(`Running ${toolName}... (Step ${stepNum})`, activeSessionId || undefined);
+                    // Show tool start, then let progress messages update it
+                    setSessionThinking(`Starting ${toolName} (Step ${stepNum})`, activeSessionId || undefined);
                   } else {
-                    thinkingMessages.push(`Step ${stepNum}: Executing tool...`);
-                    setSessionThinking(`Executing tool... (Step ${stepNum})`, activeSessionId || undefined);
+                    thinkingMessages.push(`Step ${stepNum}: Executing tool`);
                   }
                 } else if (nodeName === "reflection") {
                   let reflectionText = data.reflection || "Validating results";
@@ -241,14 +250,27 @@ export default function MainApp() {
                   const result = data.tool_result;
                   const status = result?.success ? "✓" : "✗";
                   thinkingMessages.push(`Step ${stepNum}: Validate ${status} - ${reflectionText}`);
-                  setSessionThinking(`Validating results... (Step ${stepNum})`, activeSessionId || undefined);
+                  setSessionThinking(`Validating research data (Step ${stepNum})`, activeSessionId || undefined);
                 } else if (nodeName === "response") {
                   thinkingMessages.push(`Step ${stepNum}: Generating final response`);
-                  setSessionThinking(`Writing response... (Step ${stepNum})`, activeSessionId || undefined);
+                  setSessionThinking(`Generating comprehensive report - please wait (Step ${stepNum})`, activeSessionId || undefined);
                 }
 
-                if (data.content && data.content.trim() && !data.content.startsWith("💭") && !data.content.startsWith("🔍") && !data.content.startsWith("📊")) {
+                // Log for debugging
+                if (data.content) {
+                  console.log(`📝 Received content from ${nodeName}: ${data.content.substring(0, 100)}...`);
+                }
+                
+                // Accept content if it's valid and not an internal thinking message
+                // Skip short status messages - real reports are > 500 chars
+                const isInternalMessage = (data.content?.startsWith("Reasoning:") && nodeName !== "response") ||
+                                          (nodeName === "reflection" && data.content?.length < 500) ||
+                                          data.content?.startsWith("Found ") ||
+                                          data.content?.startsWith("Searching ");
+                
+                if (data.content && data.content.trim() && !isInternalMessage) {
                   assistantContent = data.content;
+                  console.log(`✅ Set assistantContent (${assistantContent.length} chars)`);
                   
                   setSessions((prevSessions) => {
                     return prevSessions.map((session) => {
@@ -285,6 +307,46 @@ export default function MainApp() {
                     });
                   });
                 }
+              } else if (data.type === "final_response" && data.content) {
+                // CRITICAL: Handle explicit final response event
+                // This ensures we always display the full report
+                console.log(`📥 RECEIVED FINAL RESPONSE: ${data.content.length} chars`);
+                assistantContent = data.content;
+                
+                setSessions((prevSessions) => {
+                  return prevSessions.map((session) => {
+                    if (session.id !== currentSessionId) return session;
+                    
+                    const currentMessages = session.messages || [];
+                    const existingIndex = currentMessages.findIndex(msg => msg.id === assistantMessageId);
+                    
+                    let updatedMessages;
+                    if (existingIndex >= 0) {
+                      updatedMessages = currentMessages.map((msg) =>
+                        msg.id === assistantMessageId
+                          ? { 
+                              ...msg, 
+                              content: assistantContent, 
+                              thinkingSteps: [...thinkingMessages],
+                              isStreaming: false 
+                            }
+                          : msg
+                      );
+                    } else {
+                      const newMessage: Message = {
+                        id: assistantMessageId,
+                        role: "assistant" as const,
+                        content: assistantContent,
+                        timestamp: new Date().toISOString(),
+                        isStreaming: false,
+                        thinkingSteps: [...thinkingMessages],
+                      };
+                      updatedMessages = [...currentMessages, newMessage];
+                    }
+                    
+                    return { ...session, messages: updatedMessages };
+                  });
+                });
               } else if (data.type === "complete") {
                 setSessionThinking(null, activeSessionId || undefined);
                 if (activeSessionId) {
@@ -351,13 +413,52 @@ export default function MainApp() {
     setIsInitialized(true);
   }, []);
 
-  // Save sessions to localStorage
+  // Save sessions to localStorage with size management
   useEffect(() => {
     if (isInitialized && sessions.length > 0) {
       try {
-        localStorage.setItem("research_sessions", JSON.stringify(sessions));
+        // Limit to 20 most recent sessions to prevent localStorage overflow
+        const MAX_SESSIONS = 20;
+        const sessionsToSave = sessions.slice(0, MAX_SESSIONS);
+        
+        // For each session, limit thinkingSteps to prevent bloat
+        const cleanedSessions = sessionsToSave.map(session => ({
+          ...session,
+          messages: (session.messages || []).map(msg => ({
+            ...msg,
+            // Limit thinking steps to last 10 per message
+            thinkingSteps: msg.thinkingSteps?.slice(-10) || [],
+          })),
+        }));
+        
+        const dataToSave = JSON.stringify(cleanedSessions);
+        
+        // Check size before saving (localStorage limit is ~5MB)
+        if (dataToSave.length > 4 * 1024 * 1024) {
+          console.warn("Sessions data too large, trimming old sessions");
+          // Keep only 10 sessions if too large
+          const trimmedSessions = cleanedSessions.slice(0, 10);
+          localStorage.setItem("research_sessions", JSON.stringify(trimmedSessions));
+        } else {
+          localStorage.setItem("research_sessions", dataToSave);
+        }
+        
+        console.log(`💾 Saved ${cleanedSessions.length} sessions to localStorage`);
       } catch (error) {
         console.error("Error saving sessions:", error);
+        // If quota exceeded, clear old data and try again
+        if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+          try {
+            const minimalSessions = sessions.slice(0, 5).map(s => ({
+              ...s,
+              messages: s.messages?.slice(-5) || [],
+            }));
+            localStorage.setItem("research_sessions", JSON.stringify(minimalSessions));
+            console.warn("Saved minimal sessions due to quota");
+          } catch (e) {
+            console.error("Failed to save even minimal sessions:", e);
+          }
+        }
       }
     }
   }, [sessions, isInitialized]);

@@ -34,6 +34,8 @@ class ResearchData(TypedDict):
     curricula: list[dict]    # Curriculum/lesson data
     courses: list[dict]      # Detailed course info with pricing
     lesson_frequency: list[dict]  # Lessons ranked by frequency
+    module_inventory: list[dict]  # All unique modules across courses
+    tiered_courses: dict  # Courses organized by price tier
     reddit_posts: list[dict]
     quora_answers: list[dict]
     podcasts: list[dict]
@@ -96,6 +98,8 @@ def create_initial_state(session_id: str) -> AgentState:
             curricula=[],
             courses=[],
             lesson_frequency=[],
+            module_inventory=[],
+            tiered_courses={},
             reddit_posts=[],
             quora_answers=[],
             podcasts=[],

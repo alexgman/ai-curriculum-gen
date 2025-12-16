@@ -8,7 +8,20 @@ from app.prompts.reflection import REFLECTION_SYSTEM_PROMPT, REFLECTION_USER_PRO
 from app.utils.truncation import truncate_text, format_research_summary, truncate_research_data
 
 # Session-based research data store (persists across nodes)
+# Limited to 50 sessions max to prevent memory leaks
 _session_research_data: dict[str, ResearchData] = {}
+_MAX_SESSIONS = 50
+
+
+def _cleanup_old_sessions():
+    """Remove old sessions if we exceed the limit."""
+    global _session_research_data
+    if len(_session_research_data) > _MAX_SESSIONS:
+        # Keep only the most recent half
+        keys = list(_session_research_data.keys())
+        for key in keys[:len(keys)//2]:
+            del _session_research_data[key]
+        print(f"🧹 Cleaned up old sessions, {len(_session_research_data)} remaining")
 
 
 async def reflection_node(state: AgentState) -> dict:
@@ -67,15 +80,29 @@ async def reflection_node(state: AgentState) -> dict:
             last_user_message = msg.content
             break
     
-    # Build the prompt (HEAVILY TRUNCATED to prevent context overflow)
-    # Best practice: Only send what's needed for validation
-    tool_data_preview = str(tool_result["data"])[:1000] + "..." if tool_result.get("data") else "None"
+    # Build the prompt with actual course count (not truncated preview)
+    tool_data = tool_result.get("data", {})
+    
+    # Count actual courses found
+    course_count = 0
+    if isinstance(tool_data, dict) and "courses" in tool_data:
+        course_count = len(tool_data["courses"])
+    
+    # Build a summary instead of raw data
+    tool_summary = f"Found {course_count} courses"
+    if isinstance(tool_data, dict):
+        if course_count > 0:
+            # Show first 3 course names as sample
+            sample_courses = [c.get("name", "Unknown")[:50] for c in tool_data.get("courses", [])[:3]]
+            tool_summary += f". Sample: {', '.join(sample_courses)}"
+        if tool_data.get("price_analysis"):
+            tool_summary += f". Price range: {tool_data['price_analysis'].get('range', 'N/A')}"
     
     user_prompt = REFLECTION_USER_PROMPT.format(
         user_query=truncate_text(last_user_message, max_tokens=200),
         industry=state.get("industry", "Not specified"),
         tool_name=tool_result["tool_name"],
-        tool_result=tool_data_preview,  # Only first 1000 chars
+        tool_result=tool_summary,  # Summary with actual count
         current_research=format_research_summary(truncate_research_data(state["research_data"], max_items_per_category=5)),
     )
     
@@ -102,6 +129,9 @@ async def reflection_node(state: AgentState) -> dict:
         tool_result["data"],
     )
     
+    # Cleanup old sessions if needed
+    _cleanup_old_sessions()
+    
     # Store in session-based cache (CRITICAL for persistence)
     _session_research_data[session_id] = updated_research
     
@@ -112,24 +142,28 @@ async def reflection_node(state: AgentState) -> dict:
     # Increment tool call count
     tool_call_count = state.get("tool_call_count", 0) + 1
     
-    # Determine next node
-    if reflection["is_sufficient"]:
+    # Count courses
+    courses_count = len(updated_research.get("courses", []))
+    
+    print(f"🎯 REFLECTION: {courses_count} courses found after {tool_call_count} tool calls")
+    
+    # Build reflection message
+    if courses_count > 0:
+        reflection_msg = f"✓ Found {courses_count} courses. Generating comprehensive report..."
         next_node = "response"
     else:
-        next_node = "reasoning"
+        reflection_msg = f"No courses found yet. Searching more..."
+        next_node = "reasoning" if tool_call_count < 2 else "response"
     
-    # Build detailed reflection message
-    reflection_msg = reflection['reasoning']
-    if not reflection["is_sufficient"] and reflection.get("missing_data"):
-        reflection_msg += f" | Missing: {', '.join(reflection['missing_data'][:3])}"
+    print(f"🎯 REFLECTION -> {next_node}")
     
     return {
         "reflection_result": reflection,
         "research_data": updated_research,
         "next_node": next_node,
-        "tool_call_count": tool_call_count,  # Track number of tool calls
-        "messages": [AIMessage(content=f"Reflection: {reflection_msg}")],
-        "reflection_explanation": reflection['reasoning'],  # Store for frontend
+        "tool_call_count": tool_call_count,
+        "messages": [AIMessage(content=reflection_msg)],
+        "reflection_explanation": reflection_msg,
     }
 
 
@@ -215,6 +249,12 @@ def _update_research_data(
                 courses_list = tool_data["courses"]
                 print(f"📚 Adding {len(courses_list)} courses to research_data")
                 updated["courses"].extend(courses_list)
+            # Add module inventory
+            if "module_inventory" in tool_data:
+                updated["module_inventory"].extend(tool_data["module_inventory"])
+            # Add tiered courses
+            if "tiered_courses" in tool_data:
+                updated["tiered_courses"] = tool_data["tiered_courses"]
             # Add lesson frequency data
             if "lesson_frequency" in tool_data:
                 updated["lesson_frequency"].extend(tool_data["lesson_frequency"])

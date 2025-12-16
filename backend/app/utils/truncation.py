@@ -16,85 +16,104 @@ def truncate_text(text: str, max_tokens: int = 2000) -> str:
     return text[:max_chars] + f"\n\n... (truncated, original length: {len(text)} chars)"
 
 
-def truncate_research_data(data: dict, max_items_per_category: int = 10) -> dict:
+def truncate_research_data(data: dict, max_items_per_category: int = 15) -> dict:
     """
     Truncate research data to prevent context overflow.
-    
-    Best practice: Keep only the most relevant data, summarize the rest.
+    Preserves the most important data for curriculum research.
     """
     truncated = {}
     
-    # COURSES - PRIMARY DATA (keep top 25)
+    # COURSES - Keep up to 30 with full curriculum
     if "courses" in data and data["courses"]:
-        courses = data["courses"][:25]  # Keep 25 courses
+        courses = data["courses"][:30]
         truncated["courses"] = [
             {
-                "name": c.get("name", c.get("title", ""))[:150],
+                "name": c.get("name", c.get("title", ""))[:200],
                 "provider": c.get("provider", c.get("platform", ""))[:100],
-                "url": c.get("url", "")[:200],
-                "price": c.get("price", "N/A"),
+                "url": c.get("url", "")[:250],
+                "price": c.get("price", "[Not available]"),
+                "price_tier": c.get("price_tier", "mid"),
                 "certification": c.get("certification", "Available"),
                 "rating": c.get("rating", ""),
+                "students": c.get("students", ""),
                 "duration": c.get("duration", ""),
-                "modules": c.get("modules", [])[:10],  # Include up to 10 modules per course
+                "curriculum": c.get("curriculum", c.get("modules", []))[:12],  # Keep 12 modules per course
             }
             for c in courses
         ]
-        if len(data["courses"]) > 25:
+        if len(data["courses"]) > 30:
             truncated["courses_total"] = len(data["courses"])
     
-    # Competitors - keep top 10
+    # TIERED COURSES - Keep the structure
+    if "tiered_courses" in data:
+        truncated["tiered_courses"] = {}
+        for tier, courses in data["tiered_courses"].items():
+            truncated["tiered_courses"][tier] = [
+                {
+                    "name": c.get("name", "")[:200],
+                    "provider": c.get("provider", "")[:100],
+                    "url": c.get("url", "")[:250],
+                    "price": c.get("price", ""),
+                    "curriculum": c.get("curriculum", [])[:12],
+                }
+                for c in courses[:15]
+            ]
+    
+    # MODULE INVENTORY - Keep all with truncated sources
+    if "module_inventory" in data:
+        truncated["module_inventory"] = [
+            {
+                "name": m.get("name", "")[:150],
+                "description": m.get("description", "")[:200],
+                "frequency": m.get("frequency", "Low"),
+                "count": m.get("count", 1),
+                "sources": m.get("sources", [])[:5],
+            }
+            for m in data["module_inventory"][:100]
+        ]
+    
+    # Competitors - keep top 15
     if "competitors" in data and data["competitors"]:
-        competitors = data["competitors"][:max_items_per_category]
-        # Simplify each competitor
         truncated["competitors"] = [
             {
-                "name": c.get("name", c.get("title", ""))[:100],
-                "url": c.get("url", "")[:200],
+                "name": c.get("name", c.get("title", ""))[:150],
+                "url": c.get("url", "")[:250],
                 "price": c.get("price", ""),
                 "snippet": c.get("snippet", "")[:200],
             }
-            for c in competitors
+            for c in data["competitors"][:max_items_per_category]
         ]
-        if len(data["competitors"]) > max_items_per_category:
-            truncated["competitors_total"] = len(data["competitors"])
     
-    # Curricula - keep top 5 with limited modules
+    # Curricula
     if "curricula" in data:
-        curricula = data["curricula"][:5]
         truncated["curricula"] = [
             {
-                "course_name": c.get("course_name", "")[:100],
-                "provider": c.get("provider", "")[:50],
-                "modules": (c.get("modules", []) or [])[:8],  # Only first 8 modules
+                "course_name": c.get("course_name", "")[:150],
+                "provider": c.get("provider", "")[:100],
+                "modules": (c.get("modules", []) or [])[:10],
             }
-            for c in curricula
+            for c in data["curricula"][:10]
         ]
-        if len(data["curricula"]) > 5:
-            truncated["curricula_total"] = len(data["curricula"])
     
-    # Reddit/forum posts - keep top 10 with truncated content
+    # Forum posts
     for key in ["reddit_posts", "quora_answers", "podcasts", "blogs"]:
         if key in data:
-            items = data[key][:max_items_per_category]
             truncated[key] = [
                 {
-                    "title": item.get("title", item.get("name", ""))[:150],
-                    "snippet": item.get("snippet", item.get("description", ""))[:200],
-                    "url": item.get("url", "")[:200],
+                    "title": item.get("title", item.get("name", ""))[:200],
+                    "snippet": item.get("snippet", item.get("description", ""))[:250],
+                    "url": item.get("url", "")[:250],
                 }
-                for item in items
+                for item in data[key][:max_items_per_category]
             ]
-            if len(data[key]) > max_items_per_category:
-                truncated[f"{key}_total"] = len(data[key])
     
-    # Trending topics - keep top 15
+    # Trending topics
     if "trending_topics" in data:
-        truncated["trending_topics"] = data["trending_topics"][:15]
+        truncated["trending_topics"] = data["trending_topics"][:20]
     
-    # Sentiment summary - truncate if too long
+    # Sentiment summary
     if "sentiment_summary" in data and data["sentiment_summary"]:
-        truncated["sentiment_summary"] = truncate_text(data["sentiment_summary"], max_tokens=500)
+        truncated["sentiment_summary"] = truncate_text(data["sentiment_summary"], max_tokens=600)
     
     return truncated
 
@@ -102,19 +121,12 @@ def truncate_research_data(data: dict, max_items_per_category: int = 10) -> dict
 async def summarize_large_content(content: str, max_output_tokens: int = 1000) -> str:
     """
     Summarize large content using Claude before adding to context.
-    
-    This is a KEY best practice for agentic systems:
-    - Don't accumulate raw data
-    - Summarize at each step
-    - Keep context manageable
     """
     from app.services.anthropic import claude_client
     
-    # If content is already small, return as-is
     if estimate_tokens(content) < 1000:
         return content
     
-    # Otherwise, summarize
     prompt = f"""Summarize the key insights from this research data concisely:
 
 {truncate_text(content, max_tokens=6000)}
@@ -136,27 +148,35 @@ Keep it under {max_output_tokens} tokens."""
         )
         return summary
     except Exception as e:
-        # If summarization fails, just truncate
         return truncate_text(content, max_tokens=max_output_tokens)
 
 
 def format_research_summary(data: dict) -> str:
-    """
-    Format research data as a concise summary for reasoning node.
-    
-    Best practice: Give the reasoning node a SUMMARY, not raw data.
-    """
+    """Format research data as a concise summary for reasoning node."""
     lines = []
+    
+    if data.get("courses"):
+        count = len(data["courses"])
+        total = data.get("courses_total", count)
+        lines.append(f"- Courses: {count} loaded (total found: {total})")
+        
+        # Count by tier if available
+        if data.get("tiered_courses"):
+            for tier, courses in data["tiered_courses"].items():
+                lines.append(f"  - {tier.title()}: {len(courses)} courses")
+    
+    if data.get("module_inventory"):
+        count = len(data["module_inventory"])
+        vital = sum(1 for m in data["module_inventory"] if m.get("frequency") == "Vital")
+        lines.append(f"- Module Inventory: {count} unique topics ({vital} vital)")
     
     if data.get("competitors"):
         count = len(data["competitors"])
-        total = data.get("competitors_total", count)
-        lines.append(f"- Competitors: {count} loaded (total found: {total})")
+        lines.append(f"- Competitors: {count}")
     
     if data.get("curricula"):
         count = len(data["curricula"])
-        total = data.get("curricula_total", count)
-        lines.append(f"- Curricula: {count} extracted (total: {total})")
+        lines.append(f"- Curricula: {count} extracted")
     
     if data.get("reddit_posts"):
         count = len(data["reddit_posts"])
@@ -178,4 +198,3 @@ def format_research_summary(data: dict) -> str:
         return "No research data yet"
     
     return "\n".join(lines)
-

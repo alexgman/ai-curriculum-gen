@@ -88,11 +88,17 @@ async def reasoning_node(state: AgentState) -> dict:
         HumanMessage(content=user_prompt),
     ]
     
+    import sys
+    print(f"🧠 REASONING: Calling Claude for query: {last_user_message[:50]}...", file=sys.stderr, flush=True)
+    
     response = await llm.ainvoke(messages)
+    
+    print(f"🧠 REASONING RESPONSE: {response.content[:300]}...", file=sys.stderr, flush=True)
     
     # Parse the response
     try:
         result = _parse_reasoning_response(response.content)
+        print(f"🧠 PARSED RESULT: action={result.get('action')}, tool={result.get('tool_name', 'N/A')}", file=sys.stderr, flush=True)
     except Exception as e:
         # If parsing fails, try to respond to user
         return {
@@ -101,7 +107,24 @@ async def reasoning_node(state: AgentState) -> dict:
         }
     
     # Update state based on decision
-    if result["action"] == "call_tool":
+    if result["action"] == "ask_question":
+        # AI is asking a clarifying question - respond directly with the question
+        question = result.get("question", "Could you please provide more details?")
+        options = result.get("options", [])
+        
+        # Format the question with options if provided
+        if options:
+            options_text = "\n".join([f"- {opt}" for opt in options])
+            question_text = f"{question}\n\n{options_text}"
+        else:
+            question_text = question
+        
+        return {
+            "next_node": "response",  # Go directly to response to show the question
+            "messages": [AIMessage(content=question_text)],
+            "is_clarifying_question": True,  # Flag for frontend
+        }
+    elif result["action"] == "call_tool":
         # Include the full reasoning explanation
         reasoning_text = result.get("thinking", "Planning next step")
         return {

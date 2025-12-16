@@ -91,8 +91,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             })}
           </p>
           
-          {/* Actions for assistant messages */}
-          {!isUser && message.content && !message.isStreaming && (
+          {/* Actions only for final report (not reasoning steps) */}
+          {!isUser && message.content && !message.isStreaming && 
+           /* Only show for substantial reports with headers - not short reasoning messages */
+           message.content.length > 500 && 
+           (message.content.includes("# ") || message.content.includes("## ")) && (
             <MessageActions content={message.content} messageId={message.id} />
           )}
         </div>
