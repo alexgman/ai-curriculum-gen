@@ -187,90 +187,142 @@ export default function MainApp() {
       let assistantContent = "";
       let assistantMessageId = generateUUID();
       let thinkingMessages: string[] = [];
+      let sseBuffer = "";  // Buffer for incomplete SSE messages
 
       while (reader) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
+        // Append to buffer using streaming mode to handle multi-byte characters
+        sseBuffer += decoder.decode(value, { stream: true });
+        
+        // SSE messages are separated by double newlines (\n\n)
+        // Split and keep any incomplete message in the buffer
+        const messages = sseBuffer.split("\n\n");
+        sseBuffer = messages.pop() || "";  // Keep incomplete part for next chunk
+        
+        for (const message of messages) {
+          // Each SSE message can have multiple lines (event:, data:, id:, etc.)
+          const lines = message.split("\n");
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const jsonStr = line.slice(6);
+                if (!jsonStr.trim()) continue;  // Skip empty data lines
+                const data = JSON.parse(jsonStr);
 
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
+                // Handle session sync from backend - CRITICAL for context persistence
+                if (data.type === "session" && data.session_id) {
+                  console.log(`🔗 Backend session_id received: ${data.session_id}`);
+                  // If frontend has a different session_id, we need to update the backend's reference
+                  // But more importantly, we need to make sure subsequent messages use the same session_id
+                } else if (data.type === "thinking") {
+                  // Show detailed progress from backend tools - these are the real status updates
+                  const stepInfo = data.step ? ` (Step ${data.step})` : "";
+                  const status = data.status || data.tool || "Processing";
+                  setSessionThinking(`${status}${stepInfo}`, activeSessionId || undefined);
+                } else if (data.type === "node") {
+                  const nodeName = data.node;
+                  const stepNum = data.step || thinkingMessages.length + 1;
+                  
+                  // Only add to thinking messages log, don't overwrite the live status
+                  // The "thinking" events from backend tools have more detailed progress
+                  if (nodeName === "reasoning") {
+                    let reasoningText = data.reasoning || "Analyzing query and planning research strategy";
+                    if (data.content) {
+                      reasoningText = data.content.replace(/^[💭🔍📊🔧✍️Reasoning:\s]*/g, "").trim();
+                    }
+                    if (reasoningText.length > 100) {
+                      reasoningText = reasoningText.slice(0, 100) + "...";
+                    }
+                    thinkingMessages.push(`Step ${stepNum}: Planning - ${reasoningText}`);
+                    // Don't overwrite status - let tool progress messages show
+                  } else if (nodeName === "tool_executor") {
+                    const toolCall = data.tool_call;
+                    if (toolCall) {
+                      const toolName = toolCall.name;
+                      const args = toolCall.arguments || {};
+                      const argStr = args.query || args.url || args.industry || Object.values(args)[0] || "";
+                      const shortArg = typeof argStr === 'string' ? argStr.slice(0, 40) : String(argStr).slice(0, 40);
+                      thinkingMessages.push(`Step ${stepNum}: Running ${toolName}("${shortArg}")`);
+                      // Show tool start, then let progress messages update it
+                      setSessionThinking(`Starting ${toolName} (Step ${stepNum})`, activeSessionId || undefined);
+                    } else {
+                      thinkingMessages.push(`Step ${stepNum}: Executing tool`);
+                    }
+                  } else if (nodeName === "reflection") {
+                    let reflectionText = data.reflection || "Validating results";
+                    if (data.content) {
+                      reflectionText = data.content.replace(/^[💭🔍📊🔧✍️Reflection:\s]*/g, "").trim();
+                    }
+                    if (reflectionText.length > 80) {
+                      reflectionText = reflectionText.slice(0, 80) + "...";
+                    }
+                    const result = data.tool_result;
+                    const status = result?.success ? "✓" : "✗";
+                    thinkingMessages.push(`Step ${stepNum}: Validate ${status} - ${reflectionText}`);
+                    setSessionThinking(`Validating research data (Step ${stepNum})`, activeSessionId || undefined);
+                  } else if (nodeName === "response") {
+                    thinkingMessages.push(`Step ${stepNum}: Generating final response`);
+                    setSessionThinking(`Generating comprehensive report - please wait (Step ${stepNum})`, activeSessionId || undefined);
+                  }
 
-              // Handle session sync from backend - CRITICAL for context persistence
-              if (data.type === "session" && data.session_id) {
-                console.log(`🔗 Backend session_id received: ${data.session_id}`);
-                // If frontend has a different session_id, we need to update the backend's reference
-                // But more importantly, we need to make sure subsequent messages use the same session_id
-              } else if (data.type === "thinking") {
-                // Show detailed progress from backend tools - these are the real status updates
-                const stepInfo = data.step ? ` (Step ${data.step})` : "";
-                const status = data.status || data.tool || "Processing";
-                setSessionThinking(`${status}${stepInfo}`, activeSessionId || undefined);
-              } else if (data.type === "node") {
-                const nodeName = data.node;
-                const stepNum = data.step || thinkingMessages.length + 1;
-                
-                // Only add to thinking messages log, don't overwrite the live status
-                // The "thinking" events from backend tools have more detailed progress
-                if (nodeName === "reasoning") {
-                  let reasoningText = data.reasoning || "Analyzing query and planning research strategy";
+                  // Log for debugging
                   if (data.content) {
-                    reasoningText = data.content.replace(/^[💭🔍📊🔧✍️Reasoning:\s]*/g, "").trim();
+                    console.log(`📝 Received content from ${nodeName}: ${data.content.substring(0, 100)}...`);
                   }
-                  if (reasoningText.length > 100) {
-                    reasoningText = reasoningText.slice(0, 100) + "...";
+                  
+                  // Accept content if it's valid and not an internal thinking message
+                  // Skip short status messages - real reports are > 500 chars
+                  const isInternalMessage = (data.content?.startsWith("Reasoning:") && nodeName !== "response") ||
+                                            (nodeName === "reflection" && data.content?.length < 500) ||
+                                            data.content?.startsWith("Found ") ||
+                                            data.content?.startsWith("Searching ");
+                  
+                  if (data.content && data.content.trim() && !isInternalMessage) {
+                    assistantContent = data.content;
+                    console.log(`✅ Set assistantContent (${assistantContent.length} chars)`);
+                    
+                    setSessions((prevSessions) => {
+                      return prevSessions.map((session) => {
+                        if (session.id !== currentSessionId) return session;
+                        
+                        const currentMessages = session.messages || [];
+                        const existingIndex = currentMessages.findIndex(msg => msg.id === assistantMessageId);
+                        
+                        let updatedMessages;
+                        if (existingIndex >= 0) {
+                          updatedMessages = currentMessages.map((msg) =>
+                            msg.id === assistantMessageId
+                              ? { 
+                                  ...msg, 
+                                  content: assistantContent, 
+                                  thinkingSteps: [...thinkingMessages],
+                                  isStreaming: false 
+                                }
+                              : msg
+                          );
+                        } else {
+                          const newMessage: Message = {
+                            id: assistantMessageId,
+                            role: "assistant" as const,
+                            content: assistantContent,
+                            timestamp: new Date().toISOString(),
+                            isStreaming: false,
+                            thinkingSteps: [...thinkingMessages],
+                          };
+                          updatedMessages = [...currentMessages, newMessage];
+                        }
+                        
+                        return { ...session, messages: updatedMessages };
+                      });
+                    });
                   }
-                  thinkingMessages.push(`Step ${stepNum}: Planning - ${reasoningText}`);
-                  // Don't overwrite status - let tool progress messages show
-                } else if (nodeName === "tool_executor") {
-                  const toolCall = data.tool_call;
-                  if (toolCall) {
-                    const toolName = toolCall.name;
-                    const args = toolCall.arguments || {};
-                    const argStr = args.query || args.url || args.industry || Object.values(args)[0] || "";
-                    const shortArg = typeof argStr === 'string' ? argStr.slice(0, 40) : String(argStr).slice(0, 40);
-                    thinkingMessages.push(`Step ${stepNum}: Running ${toolName}("${shortArg}")`);
-                    // Show tool start, then let progress messages update it
-                    setSessionThinking(`Starting ${toolName} (Step ${stepNum})`, activeSessionId || undefined);
-                  } else {
-                    thinkingMessages.push(`Step ${stepNum}: Executing tool`);
-                  }
-                } else if (nodeName === "reflection") {
-                  let reflectionText = data.reflection || "Validating results";
-                  if (data.content) {
-                    reflectionText = data.content.replace(/^[💭🔍📊🔧✍️Reflection:\s]*/g, "").trim();
-                  }
-                  if (reflectionText.length > 80) {
-                    reflectionText = reflectionText.slice(0, 80) + "...";
-                  }
-                  const result = data.tool_result;
-                  const status = result?.success ? "✓" : "✗";
-                  thinkingMessages.push(`Step ${stepNum}: Validate ${status} - ${reflectionText}`);
-                  setSessionThinking(`Validating research data (Step ${stepNum})`, activeSessionId || undefined);
-                } else if (nodeName === "response") {
-                  thinkingMessages.push(`Step ${stepNum}: Generating final response`);
-                  setSessionThinking(`Generating comprehensive report - please wait (Step ${stepNum})`, activeSessionId || undefined);
-                }
-
-                // Log for debugging
-                if (data.content) {
-                  console.log(`📝 Received content from ${nodeName}: ${data.content.substring(0, 100)}...`);
-                }
-                
-                // Accept content if it's valid and not an internal thinking message
-                // Skip short status messages - real reports are > 500 chars
-                const isInternalMessage = (data.content?.startsWith("Reasoning:") && nodeName !== "response") ||
-                                          (nodeName === "reflection" && data.content?.length < 500) ||
-                                          data.content?.startsWith("Found ") ||
-                                          data.content?.startsWith("Searching ");
-                
-                if (data.content && data.content.trim() && !isInternalMessage) {
+                } else if (data.type === "final_response" && data.content) {
+                  // CRITICAL: Handle explicit final response event
+                  // This ensures we always display the full report
+                  console.log(`📥 RECEIVED FINAL RESPONSE: ${data.content.length} chars`);
                   assistantContent = data.content;
-                  console.log(`✅ Set assistantContent (${assistantContent.length} chars)`);
                   
                   setSessions((prevSessions) => {
                     return prevSessions.map((session) => {
@@ -306,59 +358,39 @@ export default function MainApp() {
                       return { ...session, messages: updatedMessages };
                     });
                   });
+                } else if (data.type === "complete") {
+                  setSessionThinking(null, activeSessionId || undefined);
+                  if (activeSessionId) {
+                    generateSessionTitle(activeSessionId, content).catch(console.error);
+                  }
+                } else if (data.type === "error") {
+                  throw new Error(data.message || "Unknown error");
                 }
-              } else if (data.type === "final_response" && data.content) {
-                // CRITICAL: Handle explicit final response event
-                // This ensures we always display the full report
-                console.log(`📥 RECEIVED FINAL RESPONSE: ${data.content.length} chars`);
+              } catch (e: any) {
+                // Log parse errors for debugging (common with chunked data)
+                console.warn(`SSE parse warning: ${e.message}`, line.slice(0, 100));
+                if (e.message && e.message.includes("Error")) {
+                  throw e;
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // Process any remaining data in buffer after stream ends
+      if (sseBuffer.trim()) {
+        const remainingLines = sseBuffer.split("\n");
+        for (const line of remainingLines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === "final_response" && data.content) {
+                console.log(`📥 RECEIVED FINAL RESPONSE (from buffer): ${data.content.length} chars`);
                 assistantContent = data.content;
-                
-                setSessions((prevSessions) => {
-                  return prevSessions.map((session) => {
-                    if (session.id !== currentSessionId) return session;
-                    
-                    const currentMessages = session.messages || [];
-                    const existingIndex = currentMessages.findIndex(msg => msg.id === assistantMessageId);
-                    
-                    let updatedMessages;
-                    if (existingIndex >= 0) {
-                      updatedMessages = currentMessages.map((msg) =>
-                        msg.id === assistantMessageId
-                          ? { 
-                              ...msg, 
-                              content: assistantContent, 
-                              thinkingSteps: [...thinkingMessages],
-                              isStreaming: false 
-                            }
-                          : msg
-                      );
-                    } else {
-                      const newMessage: Message = {
-                        id: assistantMessageId,
-                        role: "assistant" as const,
-                        content: assistantContent,
-                        timestamp: new Date().toISOString(),
-                        isStreaming: false,
-                        thinkingSteps: [...thinkingMessages],
-                      };
-                      updatedMessages = [...currentMessages, newMessage];
-                    }
-                    
-                    return { ...session, messages: updatedMessages };
-                  });
-                });
-              } else if (data.type === "complete") {
-                setSessionThinking(null, activeSessionId || undefined);
-                if (activeSessionId) {
-                  generateSessionTitle(activeSessionId, content).catch(console.error);
-                }
-              } else if (data.type === "error") {
-                throw new Error(data.message || "Unknown error");
               }
-            } catch (e: any) {
-              if (e.message && e.message.includes("Error")) {
-                throw e;
-              }
+            } catch (e) {
+              console.warn("Failed to parse remaining buffer:", e);
             }
           }
         }
