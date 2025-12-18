@@ -36,6 +36,16 @@ async def tool_executor_node(state: AgentState) -> dict:
     
     print(f"🔧 TOOL EXECUTOR: Starting {tool_name} with args: {tool_args}")
     
+    # If we have a research plan, inject the selected competitors and certifications
+    # into the course discovery tool
+    research_plan = state.get("research_plan")
+    if tool_name == "discover_courses_with_rankings" and research_plan:
+        if research_plan.get("selected_competitors"):
+            tool_args["selected_competitors"] = research_plan["selected_competitors"]
+        if research_plan.get("selected_certifications"):
+            tool_args["selected_certifications"] = research_plan["selected_certifications"]
+        print(f"🔧 TOOL EXECUTOR: Injected research plan context into {tool_name}")
+    
     try:
         # Execute the tool
         print(f"🔧 TOOL EXECUTOR: Calling execute_tool...")

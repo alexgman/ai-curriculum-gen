@@ -70,10 +70,32 @@ async def reasoning_node(state: AgentState) -> dict:
         }
         tool_result_str = json.dumps(tool_result_limited, indent=2)
     
+    # Get research plan if available
+    research_plan_str = "No research plan yet - do general research."
+    research_plan = state.get("research_plan")
+    if research_plan and research_plan.get("is_confirmed"):
+        # Format the confirmed research plan
+        plan_parts = [
+            f"**Industry:** {research_plan.get('industry', 'Not specified')}",
+            f"\n**Selected Competitors to Research:**"
+        ]
+        for comp in research_plan.get("competitors", [])[:10]:
+            if comp["name"] in research_plan.get("selected_competitors", []):
+                plan_parts.append(f"  - {comp['name']} ({comp.get('type', 'unknown')})")
+        
+        plan_parts.append(f"\n**Certifications to Cover:**")
+        for cert in research_plan.get("certifications", [])[:6]:
+            if cert["name"] in research_plan.get("selected_certifications", []):
+                plan_parts.append(f"  - {cert['name']}")
+        
+        plan_parts.append(f"\n**Target Audience:** {research_plan.get('selected_audience', 'All levels')}")
+        research_plan_str = "\n".join(plan_parts)
+    
     user_prompt = REASONING_USER_PROMPT.format(
         conversation_history=truncate_text(conversation_context, max_tokens=1000),
         user_query=truncate_text(last_user_message, max_tokens=200),
         industry=state.get("industry", "Not specified yet"),
+        research_plan=research_plan_str,
         research_summary=research_summary,
         last_tool_result=tool_result_str,
         reflection_feedback=truncate_text(

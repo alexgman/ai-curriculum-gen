@@ -45,6 +45,28 @@ class ResearchData(TypedDict):
     price_analysis: Optional[dict]  # Price range analysis
 
 
+class ResearchPlan(TypedDict):
+    """Research plan discovered from preliminary research."""
+    industry: str
+    competitors: list[dict]  # Discovered competitors with type and description
+    certifications: list[dict]  # Discovered certifications
+    target_audiences: list[dict]  # Identified audience segments
+    # User selections (updated through feedback)
+    selected_competitors: list[str]  # Names of competitors to focus on
+    selected_certifications: list[str]  # Certifications to cover
+    selected_audience: str  # Target audience
+    # Plan status
+    is_confirmed: bool  # User has confirmed the plan
+
+
+class ClarificationState(TypedDict):
+    """State for human-in-the-loop planning and confirmation."""
+    stage: str  # "discovery" | "presenting_plan" | "refining" | "confirmed"
+    iteration: int  # How many refinement iterations
+    user_feedback: list[str]  # History of user feedback
+    is_complete: bool  # Whether planning is done
+
+
 class AgentState(TypedDict):
     """
     State schema for the Research Agent.
@@ -69,12 +91,17 @@ class AgentState(TypedDict):
     reflection_result: Optional[ReflectionResult]
     reflection_explanation: Optional[str]  # Why reflection made its decision
     
+    # ===== Human-in-the-Loop Planning =====
+    research_plan: Optional[ResearchPlan]  # Discovered and refined research plan
+    clarification: Optional[ClarificationState]
+    awaiting_clarification: bool  # True when waiting for user response
+    
     # ===== Accumulated Research Data =====
     research_data: ResearchData
     
     # ===== Control Flow =====
     # Determines which node to go to next
-    next_node: str  # "reasoning" | "tool_executor" | "reflection" | "response" | "end"
+    next_node: str  # "reasoning" | "clarification" | "tool_executor" | "reflection" | "response" | "end"
     
     # ===== Error Handling =====
     error: Optional[str]
@@ -93,6 +120,9 @@ def create_initial_state(session_id: str) -> AgentState:
         reasoning_explanation=None,
         reflection_result=None,
         reflection_explanation=None,
+        research_plan=None,
+        clarification=None,
+        awaiting_clarification=False,
         research_data=ResearchData(
             competitors=[],
             curricula=[],

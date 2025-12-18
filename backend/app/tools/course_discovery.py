@@ -24,6 +24,8 @@ async def discover_courses_with_rankings(
     industry: str = None,
     query: str = None,
     min_results: int = 25,
+    selected_competitors: list = None,
+    selected_certifications: list = None,
 ) -> dict:
     """
     Comprehensive course discovery for curriculum research.
@@ -33,34 +35,69 @@ async def discover_courses_with_rankings(
         industry: Industry, job title, or topic to research
         query: Alias for industry parameter
         min_results: Minimum number of courses to find
+        selected_competitors: Optional list of specific competitors to search for
+        selected_certifications: Optional list of certifications to prioritize
     
     Returns:
         Comprehensive course data with curricula, prices, rankings
     """
     print(f"COURSE DISCOVERY STARTED: industry={industry}, query={query}, min_results={min_results}")
+    print(f"  Selected competitors: {selected_competitors[:5] if selected_competitors else 'None'}...")
+    print(f"  Selected certs: {selected_certifications[:3] if selected_certifications else 'None'}...")
     industry = industry or query
     if not industry:
         return {"error": "Please provide an industry or query", "courses": []}
     
     all_results = []
     
-    await _report_progress(f"Searching for '{industry}' courses across major platforms")
+    await _report_progress(f"Searching for '{industry}' courses across diverse platforms")
     
-    # STEP 1: Search across major platforms
+    # STEP 1: Search across DIVERSE sources (not just MOOCs!)
+    # The key is to balance between:
+    # - MOOCs (Coursera, Udemy, edX) - general courses
+    # - Industry-specific providers - specialized training
+    # - Certification bodies - official certifications
+    # - Trade schools / bootcamps - practical training
+    
     search_tasks = [
-        # Core platforms
-        _search_platform(f"site:coursera.org {industry} course certificate", "Coursera", 12),
-        _search_platform(f"site:udemy.com {industry} course bestseller", "Udemy", 12),
-        _search_platform(f"site:edx.org {industry} certificate course", "edX", 10),
-        _search_platform(f"site:linkedin.com/learning {industry} course", "LinkedIn Learning", 8),
-        _search_platform(f"site:pluralsight.com {industry}", "Pluralsight", 6),
-        _search_platform(f"site:skillshare.com {industry} class", "Skillshare", 6),
-        # Ranking articles
-        _search_platform(f"best {industry} online courses 2024 ranked", "Rankings", 10),
-        _search_platform(f"top {industry} certification programs compare", "Rankings", 10),
+        # ==== INDUSTRY-SPECIFIC PROVIDERS (PRIORITY) ====
+        # These are the most valuable for competitive research
+        _search_platform(f"{industry} training provider certification program", "Industry Provider", 15),
+        _search_platform(f"{industry} professional training school accredited", "Trade School", 12),
+        _search_platform(f"{industry} certification body official training", "Certification Body", 10),
+        _search_platform(f"{industry} vocational training apprenticeship", "Vocational", 8),
+        
+        # ==== MOOCS (SECONDARY - limit exposure) ====
+        _search_platform(f"site:coursera.org {industry} professional certificate", "Coursera", 6),
+        _search_platform(f"site:udemy.com {industry} course bestseller", "Udemy", 6),
+        _search_platform(f"site:edx.org {industry} certificate", "edX", 5),
+        _search_platform(f"site:linkedin.com/learning {industry}", "LinkedIn Learning", 5),
+        
+        # ==== BOOTCAMPS & SPECIALIZED ====
+        _search_platform(f"{industry} bootcamp intensive training program", "Bootcamp", 8),
+        _search_platform(f"{industry} online academy complete training", "Academy", 8),
+        
+        # ==== RANKING & COMPARISON ARTICLES ====
+        _search_platform(f"best {industry} training programs 2024 review compare", "Rankings", 10),
+        _search_platform(f"top {industry} certification courses accredited ranked", "Rankings", 8),
+        _search_platform(f"{industry} training school comparison guide", "Rankings", 6),
     ]
     
-    await _report_progress("Searching Coursera, Udemy, edX, LinkedIn Learning, Pluralsight, Skillshare")
+    await _report_progress("Searching industry providers, certification bodies, trade schools, MOOCs, bootcamps")
+    
+    # If we have specific competitors from the research plan, search for them directly
+    if selected_competitors:
+        for comp in selected_competitors[:8]:  # Top 8 selected competitors
+            search_tasks.append(
+                _search_platform(f'"{comp}" {industry} courses training', f"Competitor: {comp}", 5)
+            )
+    
+    # If we have specific certifications, search for them
+    if selected_certifications:
+        for cert in selected_certifications[:5]:  # Top 5 certifications
+            search_tasks.append(
+                _search_platform(f'{cert} certification training course {industry}', f"Cert: {cert}", 4)
+            )
     results = await asyncio.gather(*search_tasks, return_exceptions=True)
     
     for result in results:

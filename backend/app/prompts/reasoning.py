@@ -98,6 +98,9 @@ REASONING_USER_PROMPT = """## Conversation History
 
 **Industry:** {industry}
 
+**RESEARCH PLAN (User Confirmed):**
+{research_plan}
+
 **Research Data Collected:**
 {research_summary}
 
@@ -111,13 +114,20 @@ REASONING_USER_PROMPT = """## Conversation History
 
 ## YOUR DECISION:
 
-1. Is the query VAGUE (single generic word, very broad)?
-   → Ask a clarifying question with options
+**YOU HAVE A CONFIRMED RESEARCH PLAN.** Follow it precisely:
 
-2. Is the query SPECIFIC (2+ words, clear topic, named tools/platforms)?
-   → Call discover_courses_with_rankings immediately
+1. **Use the Research Plan** - The user confirmed which competitors, certifications, and audience to focus on.
+   - Search for courses from the SELECTED COMPETITORS listed in the plan
+   - Make sure to include industry specialists, not just MOOCs
+   - Focus on the SELECTED CERTIFICATIONS
 
-3. Do we already have 10+ courses researched?
-   → Generate the report (action: respond)
+2. **Search Strategy:**
+   - First search: General query for the industry + "training courses"
+   - Include specific competitor names in searches: "[CompetitorName] [industry] courses"
+   - Search for certification-specific courses: "[CertificationName] certification training"
+
+3. **When you have 15+ courses:** Generate the report (action: respond)
+
+**CRITICAL:** Do NOT search only for MOOCs (Coursera, Udemy). Include industry-specific providers from the research plan.
 
 Respond with JSON:"""

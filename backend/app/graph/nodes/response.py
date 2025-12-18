@@ -157,33 +157,39 @@ Based on enrollment data, reviews, and industry recognition:
         medium = [m for m in module_inventory if m.get("frequency") == "Medium"]
         low = [m for m in module_inventory if m.get("frequency") == "Low"]
         
+        module_num = 1  # Global numbering across all categories
+        
         if vital:
             sections.append("\n### VITAL (Found in 5+ courses)\n")
             for m in vital:
                 desc = m.get("description", "Core topic in this field.")
                 sources = ", ".join(m.get("sources", [])[:5])
-                sections.append(f"- **{m['name']}** — {desc} (Sources: {sources})\n")
+                sections.append(f"{module_num}. **{m['name']}** — {desc} (Sources: {sources})\n")
+                module_num += 1
         
         if high:
             sections.append("\n### HIGH FREQUENCY (Found in 3-4 courses)\n")
             for m in high:
                 desc = m.get("description", "Important topic.")
                 sources = ", ".join(m.get("sources", [])[:4])
-                sections.append(f"- **{m['name']}** — {desc} (Sources: {sources})\n")
+                sections.append(f"{module_num}. **{m['name']}** — {desc} (Sources: {sources})\n")
+                module_num += 1
         
         if medium:
             sections.append("\n### MEDIUM FREQUENCY (Found in 2 courses)\n")
             for m in medium:
                 desc = m.get("description", "")
                 sources = ", ".join(m.get("sources", [])[:3])
-                sections.append(f"- **{m['name']}** — {desc} (Sources: {sources})\n")
+                sections.append(f"{module_num}. **{m['name']}** — {desc} (Sources: {sources})\n")
+                module_num += 1
         
         if low:
             sections.append("\n### NICHE/SPECIALIZED (Found in 1 course)\n")
             for m in low[:20]:  # Limit niche to avoid overwhelming
                 desc = m.get("description", "")
                 source = m.get("sources", ["Unknown"])[0] if m.get("sources") else "Unknown"
-                sections.append(f"- **{m['name']}** — {desc} (Source: {source})\n")
+                sections.append(f"{module_num}. **{m['name']}** — {desc} (Source: {source})\n")
+                module_num += 1
     else:
         # Generate module inventory from course curricula
         sections.append(_generate_module_inventory_from_courses(courses))
@@ -352,6 +358,7 @@ def _generate_module_inventory_from_courses(courses: list) -> str:
     sorted_modules = sorted(module_counts.values(), key=lambda x: x["count"], reverse=True)
     
     lines = []
+    module_num = 1  # Global numbering
     
     vital = [m for m in sorted_modules if m["count"] >= 5]
     high = [m for m in sorted_modules if 3 <= m["count"] < 5]
@@ -362,23 +369,27 @@ def _generate_module_inventory_from_courses(courses: list) -> str:
         lines.append("\n### VITAL (Found in 5+ courses)\n")
         for m in vital:
             sources = ", ".join(m["sources"][:5])
-            lines.append(f"- **{m['name']}** — Found in {m['count']} courses. (Sources: {sources})\n")
+            lines.append(f"{module_num}. **{m['name']}** — Found in {m['count']} courses. (Sources: {sources})\n")
+            module_num += 1
     
     if high:
         lines.append("\n### HIGH FREQUENCY (Found in 3-4 courses)\n")
         for m in high:
             sources = ", ".join(m["sources"][:4])
-            lines.append(f"- **{m['name']}** — Found in {m['count']} courses. (Sources: {sources})\n")
+            lines.append(f"{module_num}. **{m['name']}** — Found in {m['count']} courses. (Sources: {sources})\n")
+            module_num += 1
     
     if medium:
         lines.append("\n### MEDIUM FREQUENCY (Found in 2 courses)\n")
         for m in medium:
             sources = ", ".join(m["sources"][:2])
-            lines.append(f"- **{m['name']}** — (Sources: {sources})\n")
+            lines.append(f"{module_num}. **{m['name']}** — (Sources: {sources})\n")
+            module_num += 1
     
     if low:
         lines.append("\n### NICHE/SPECIALIZED (Found in 1 course)\n")
         for m in low[:15]:  # Limit niche
-            lines.append(f"- **{m['name']}** — (Source: {m['sources'][0]})\n")
+            lines.append(f"{module_num}. **{m['name']}** — (Source: {m['sources'][0]})\n")
+            module_num += 1
     
     return "".join(lines)
