@@ -323,23 +323,24 @@ def _format_plan_presentation(plan: ResearchPlan, is_initial: bool = True, itera
     lines.append("")
     lines.append("**Target Audience:**")
     
-    selected_audiences = []
-    for aud in audiences:
-        is_selected = aud["name"] == selected_audience or selected_audience == "All levels"
-        if is_selected:
-            selected_audiences.append(aud["name"])
-    
-    lines.append(f"- {', '.join(selected_audiences)}")
+    # Show discovered audiences OR user's custom selection
+    if selected_audience and selected_audience != "All levels":
+        # User has specified a custom target audience - show their exact words
+        lines.append(f"- {selected_audience}")
+    else:
+        # Show all discovered audiences when "All levels" is selected
+        all_audience_names = [aud["name"] for aud in audiences]
+        lines.append(f"- {', '.join(all_audience_names)}")
     lines.append("")
     
-    # ===== CURRENT SELECTION =====
+    # ===== CURRENT SELECTION (highlighted with blockquote) =====
     lines.append("---")
     lines.append("")
-    lines.append("**Current Selection:**")
-    lines.append(f"- Topic: {industry}")
-    lines.append(f"- Providers: {len(selected_competitors)}")
-    lines.append(f"- Certifications: {len(selected_certifications)}")
-    lines.append(f"- Audience: {selected_audience}")
+    lines.append("> **Current Selection:**")
+    lines.append(f"> - **Topic:** {industry}")
+    lines.append(f"> - **Providers:** {len(selected_competitors)}")
+    lines.append(f"> - **Certifications:** {len(selected_certifications)}")
+    lines.append(f"> - **Audience:** {selected_audience}")
     lines.append("")
     
     # ===== ACTION =====
