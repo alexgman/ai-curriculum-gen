@@ -67,6 +67,60 @@ class ClarificationState(TypedDict):
     is_complete: bool  # Whether planning is done
 
 
+# ===== STEP 2: CURRICULUM DRAFTING TYPES =====
+
+class ExpertCourse(TypedDict):
+    """User-added course that research didn't find."""
+    source: str  # Provider name (e.g., "HVACREdu", "ESCO Institute")
+    modules: list[str]  # List of module names
+    notes: Optional[str]  # Any additional notes from user
+
+
+class CurriculumModule(TypedDict):
+    """A single module in the curriculum."""
+    id: str  # e.g., "1.1", "2.3"
+    name: str
+    description: Optional[str]
+    duration_minutes: Optional[int]
+    source: str  # "research" | "expert"
+    prerequisites: list[str]  # List of module IDs
+
+
+class CurriculumSection(TypedDict):
+    """A section containing multiple modules."""
+    name: str
+    description: Optional[str]
+    duration_hours: Optional[float]
+    modules: list[CurriculumModule]
+
+
+class CurriculumProposal(TypedDict):
+    """The proposed curriculum structure."""
+    title: str
+    summary: str
+    target_audience: str
+    certification_focus: list[str]
+    duration_hours: float
+    total_modules: int
+    sections: list[CurriculumSection]
+
+
+class CurriculumDraft(TypedDict):
+    """State for curriculum drafting (Step 2)."""
+    stage: str  # "collecting" | "proposing" | "refining" | "generating" | "complete"
+    
+    # Knowledge base
+    expert_courses: list[ExpertCourse]  # User-added courses/modules
+    
+    # Current proposal
+    proposal: Optional[CurriculumProposal]
+    
+    # Tracking
+    iteration: int  # v1, v2, v3...
+    user_feedback: list[str]  # History of refinements
+    is_approved: bool  # User approved the proposal
+
+
 class AgentState(TypedDict):
     """
     State schema for the Research Agent.
@@ -96,6 +150,11 @@ class AgentState(TypedDict):
     clarification: Optional[ClarificationState]
     awaiting_clarification: bool  # True when waiting for user response
     
+    # ===== Step 2: Curriculum Drafting =====
+    curriculum_draft: Optional[CurriculumDraft]  # Curriculum drafting state
+    awaiting_curriculum_input: bool  # True when waiting for user input on curriculum
+    curriculum_intent: bool  # Pre-computed by Claude: True if user wants to create curriculum
+    
     # ===== Accumulated Research Data =====
     research_data: ResearchData
     
@@ -123,6 +182,9 @@ def create_initial_state(session_id: str) -> AgentState:
         research_plan=None,
         clarification=None,
         awaiting_clarification=False,
+        curriculum_draft=None,
+        awaiting_curriculum_input=False,
+        curriculum_intent=False,
         research_data=ResearchData(
             competitors=[],
             curricula=[],

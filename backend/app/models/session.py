@@ -25,6 +25,9 @@ class ResearchSession(Base):
     clarification_state = Column(JSON, nullable=True)  # { stage, iteration, user_feedback, is_complete }
     research_data = Column(JSON, nullable=True)  # { courses, module_inventory, etc. }
     
+    # Step 2: Curriculum drafting state
+    curriculum_draft = Column(JSON, nullable=True)  # { stage, expert_courses, proposal, iteration, is_approved }
+    
     # Relationships
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan", order_by="Message.created_at")
     competitors = relationship("Competitor", back_populates="session", cascade="all, delete-orphan")

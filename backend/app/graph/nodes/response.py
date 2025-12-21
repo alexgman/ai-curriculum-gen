@@ -223,6 +223,32 @@ Based on enrollment data, reviews, and industry recognition:
     for url in urls[:30]:
         sections.append(f"- {url}\n")
     
+    # ==== NEXT STEPS ====
+    sections.append("\n---\n\n## Next Steps: Create Your Curriculum\n")
+    sections.append(f"""
+Your research on **{industry}** is complete! You now have a comprehensive view of the training landscape with {len(courses)} courses analyzed.
+
+**Ready to build your curriculum?** Here's what you can do:
+
+### Option 1: Add Expert Courses (Optional)
+If you found additional courses or have expert knowledge to include, tell me:
+> "I also found these courses: [Course Name] with modules: [Module 1, Module 2, ...]"
+
+### Option 2: Start Curriculum Drafting
+Say something like:
+> "Create a curriculum based on this research"
+> "Draft a training program for [target audience]"
+> "Build a curriculum focusing on [specific certifications]"
+
+I'll generate a structured curriculum proposal that you can review and refine before final generation.
+
+**Example:**
+> "I also found ESCO EPA prep materials. Create a curriculum for entry-level technicians focusing on EPA 608 certification."
+
+---
+*Type your next step above to continue.*
+""")
+    
     return "".join(sections)
 
 

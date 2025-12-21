@@ -55,6 +55,7 @@ async def init_db():
                 ("research_sessions", "clarification_state", "JSON", "NULL"),
                 ("research_sessions", "research_data", "JSON", "NULL"),
                 ("research_sessions", "client_id", "VARCHAR(100)", "NULL"),
+                ("research_sessions", "curriculum_draft", "JSON", "NULL"),  # Step 2: curriculum drafting
                 # messages table additions
                 ("messages", "thinking_steps", "JSON", "NULL"),
                 ("messages", "is_streaming", "BOOLEAN", "FALSE"),

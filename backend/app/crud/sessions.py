@@ -100,8 +100,9 @@ async def update_session_state(
     clarification_state: Optional[dict] = None,
     research_data: Optional[dict] = None,
     industry: Optional[str] = None,
+    curriculum_draft: Optional[dict] = None,
 ) -> Optional[ResearchSession]:
-    """Update session's research state (research_plan, clarification, research_data)."""
+    """Update session's research state (research_plan, clarification, research_data, curriculum_draft)."""
     values = {"updated_at": datetime.utcnow()}
     
     if research_plan is not None:
@@ -112,6 +113,8 @@ async def update_session_state(
         values["research_data"] = research_data
     if industry is not None:
         values["industry"] = industry
+    if curriculum_draft is not None:
+        values["curriculum_draft"] = curriculum_draft
     
     query = (
         update(ResearchSession)

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
 from app.graph import research_graph
+from app.graph.graph import detect_curriculum_intent
 from app.graph.state import create_initial_state, AgentState
 from app.database import get_db
 from app.crud.sessions import get_or_create_session, update_session_state, update_session, get_session
@@ -133,11 +134,35 @@ async def chat(request: ChatRequest):
                 if db_session.industry:
                     state["industry"] = db_session.industry
                 
+                # Load curriculum draft state (Step 2)
+                if hasattr(db_session, 'curriculum_draft') and db_session.curriculum_draft:
+                    state["curriculum_draft"] = db_session.curriculum_draft
+                    print(f"📋 Loaded curriculum_draft: stage={db_session.curriculum_draft.get('stage')}")
+                
                 # Check if awaiting clarification
                 if db_session.clarification_state:
                     stage = db_session.clarification_state.get("stage", "")
                     if stage in ["presenting_plan", "refining"]:
                         state["awaiting_clarification"] = True
+                
+                # Check if awaiting curriculum input
+                if hasattr(db_session, 'curriculum_draft') and db_session.curriculum_draft:
+                    stage = db_session.curriculum_draft.get("stage", "")
+                    if stage in ["proposing", "refining"]:
+                        state["awaiting_curriculum_input"] = True
+                
+                # ===== DETECT CURRICULUM INTENT USING CLAUDE =====
+                # Pre-compute curriculum intent before graph execution
+                # Only check if research is complete (has courses)
+                has_research = len(state.get("research_data", {}).get("courses", [])) > 0
+                if has_research and not state.get("awaiting_curriculum_input"):
+                    curriculum_intent = await detect_curriculum_intent(
+                        message=request.message,
+                        has_research_data=True
+                    )
+                    state["curriculum_intent"] = curriculum_intent
+                else:
+                    state["curriculum_intent"] = False
                 
                 # Setup progress queue for this session
                 progress_queue: asyncio.Queue = asyncio.Queue()
@@ -166,6 +191,7 @@ async def chat(request: ChatRequest):
                 new_clarification = None
                 new_research_data = None
                 new_industry = None
+                new_curriculum_draft = None
                 
                 # Create a shared queue for ALL SSE events
                 event_queue: asyncio.Queue = asyncio.Queue()
@@ -246,6 +272,8 @@ async def chat(request: ChatRequest):
                                 new_research_data = node_output["research_data"]
                             if "industry" in node_output:
                                 new_industry = node_output["industry"]
+                            if "curriculum_draft" in node_output:
+                                new_curriculum_draft = node_output["curriculum_draft"]
                             
                             # Process graph event - send thinking status
                             if node_name == "entry":
@@ -266,6 +294,16 @@ async def chat(request: ChatRequest):
                                 yield f"data: {json.dumps({'type': 'thinking', 'status': 'Validating results', 'step': step})}\n\n"
                             elif node_name == "response":
                                 yield f"data: {json.dumps({'type': 'thinking', 'status': 'Generating report', 'step': step})}\n\n"
+                            elif node_name == "curriculum_draft":
+                                stage = node_output.get("curriculum_draft", {}).get("stage", "")
+                                if stage == "proposing":
+                                    yield f"data: {json.dumps({'type': 'thinking', 'status': 'Creating curriculum proposal', 'step': step})}\n\n"
+                                elif stage == "refining":
+                                    yield f"data: {json.dumps({'type': 'thinking', 'status': 'Updating curriculum', 'step': step})}\n\n"
+                                elif stage == "complete":
+                                    yield f"data: {json.dumps({'type': 'thinking', 'status': 'Generating final curriculum', 'step': step})}\n\n"
+                                else:
+                                    yield f"data: {json.dumps({'type': 'thinking', 'status': 'Processing curriculum input', 'step': step})}\n\n"
                             
                             await asyncio.sleep(0.02)
                             
@@ -302,6 +340,30 @@ async def chat(request: ChatRequest):
                                             
                                             # Send final complete message
                                             yield f"data: {json.dumps({'type': 'clarification', 'content': final_response_content, 'awaiting_response': True, 'is_complete': True})}\n\n"
+                                            await asyncio.sleep(0.05)
+                                        # Handle curriculum draft - stream by lines like clarification
+                                        elif node_name == "curriculum_draft":
+                                            import random
+                                            final_response_content = msg.content
+                                            curriculum_stage = node_output.get("curriculum_draft", {}).get("stage", "")
+                                            print(f"CAPTURED CURRICULUM DRAFT: {len(final_response_content)} chars, stage={curriculum_stage}")
+                                            
+                                            # Stream by lines for proposal/refine stages
+                                            if curriculum_stage in ["proposing", "refining"]:
+                                                lines = final_response_content.split('\n')
+                                                streamed_content = ""
+                                                
+                                                for line in lines:
+                                                    streamed_content += line + '\n'
+                                                    yield f"data: {json.dumps({'type': 'curriculum_stream', 'content': streamed_content.rstrip(), 'is_complete': False})}\n\n"
+                                                    base_delay = 0.05 if line.strip() else 0.02
+                                                    variation = random.random() * 0.03
+                                                    await asyncio.sleep(base_delay + variation)
+                                                
+                                                yield f"data: {json.dumps({'type': 'curriculum_proposal', 'content': final_response_content, 'stage': curriculum_stage, 'awaiting_response': True, 'is_complete': True})}\n\n"
+                                            else:
+                                                # Complete stage - send final curriculum
+                                                yield f"data: {json.dumps({'type': 'curriculum_final', 'content': final_response_content, 'stage': 'complete'})}\n\n"
                                             await asyncio.sleep(0.05)
                                         # Track final response from response node
                                         elif node_name == "response":
@@ -359,13 +421,22 @@ async def chat(request: ChatRequest):
                     print(f"💾 Saved assistant message to DB: {len(final_response_content)} chars")
                 
                 # Save state updates to database
+                # Debug: Check what research_data we're saving
+                research_data_to_save = new_research_data if new_research_data else db_session.research_data
+                if research_data_to_save:
+                    courses_count = len(research_data_to_save.get("courses", []))
+                    print(f"💾 Saving research_data with {courses_count} courses")
+                else:
+                    print(f"💾 research_data is None/empty")
+                
                 await update_session_state(
                     db,
                     session_id=session_id,
                     research_plan=new_research_plan if new_research_plan else db_session.research_plan,
                     clarification_state=new_clarification if new_clarification else db_session.clarification_state,
-                    research_data=new_research_data if new_research_data else db_session.research_data,
+                    research_data=research_data_to_save,
                     industry=new_industry if new_industry else db_session.industry,
+                    curriculum_draft=new_curriculum_draft if new_curriculum_draft else getattr(db_session, 'curriculum_draft', None),
                 )
                 print(f"💾 Saved session state to DB")
                 
@@ -501,6 +572,8 @@ class SessionDetail(BaseModel):
     messages: list[dict]
     research_plan: dict | None
     clarification_state: dict | None
+    curriculum_draft: dict | None
+    research_data: dict | None  # Full research data including courses
     has_research_data: bool
 
 
@@ -572,6 +645,8 @@ async def get_session_detail(
         messages=message_list,
         research_plan=session.research_plan,
         clarification_state=session.clarification_state,
+        curriculum_draft=getattr(session, 'curriculum_draft', None),
+        research_data=session.research_data,  # Include full research data
         has_research_data=bool(session.research_data),
     )
 
