@@ -25,7 +25,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
       <head>
-        {/* Suppress browser extension errors */}
+        {/* Suppress browser extension errors and hydration warnings */}
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -35,7 +35,8 @@ export default function RootLayout({
                   e.message.includes('MetaMask') ||
                   e.message.includes('ethereum') ||
                   e.message.includes('chrome-extension') ||
-                  e.message.includes('extension')
+                  e.message.includes('extension') ||
+                  e.message.includes('pronounceRootElement')
                 )) {
                   e.preventDefault();
                   e.stopPropagation();
@@ -48,13 +49,27 @@ export default function RootLayout({
                   e.reason.message.includes('MetaMask') ||
                   e.reason.message.includes('ethereum') ||
                   e.reason.message.includes('chrome-extension') ||
-                  e.reason.message.includes('extension')
+                  e.reason.message.includes('extension') ||
+                  e.reason.message.includes('pronounceRootElement')
                 )) {
                   e.preventDefault();
                   e.stopPropagation();
                   return true;
                 }
               }, true);
+              
+              // Suppress hydration warnings from browser extensions
+              const originalError = console.error;
+              console.error = function(...args) {
+                if (args[0] && typeof args[0] === 'string' && (
+                  args[0].includes('Hydration') ||
+                  args[0].includes('pronounceRootElement') ||
+                  args[0].includes('suppressHydrationWarning')
+                )) {
+                  return;
+                }
+                originalError.apply(console, args);
+              };
             `,
           }}
         />

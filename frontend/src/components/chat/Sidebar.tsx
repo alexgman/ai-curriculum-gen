@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useRef, useEffect } from "react";
 import { ResearchSession } from "@/types/chat";
 
 // Sidebar props for session management
@@ -9,6 +10,7 @@ export interface SidebarProps {
   onSelectSession: (session: ResearchSession) => void;
   onNewSession: () => void;
   onDeleteSession: (sessionId: string) => void;
+  onUpdateTitle?: (sessionId: string, newTitle: string) => void;
 }
 
 export function Sidebar({
@@ -17,7 +19,37 @@ export function Sidebar({
   onSelectSession,
   onNewSession,
   onDeleteSession,
+  onUpdateTitle,
 }: SidebarProps) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  
+  // Focus input when editing starts
+  useEffect(() => {
+    if (editingId && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editingId]);
+  
+  const startEditing = (session: ResearchSession) => {
+    setEditingId(session.id);
+    setEditValue(session.title);
+  };
+  
+  const finishEditing = (sessionId: string) => {
+    if (editValue.trim() && editValue !== sessions.find(s => s.id === sessionId)?.title) {
+      onUpdateTitle?.(sessionId, editValue.trim());
+    }
+    setEditingId(null);
+    setEditValue("");
+  };
+  
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditValue("");
+  };
   return (
     <aside className="w-64 bg-background-secondary border-r border-zinc-800 flex flex-col" suppressHydrationWarning>
       {/* Logo */}
@@ -81,46 +113,96 @@ export function Sidebar({
                 : "hover:bg-background-tertiary"
             }`}
           >
-            <button
-              onClick={() => onSelectSession(session)}
-              className={`w-full text-left px-3 py-2.5 pr-10 transition-colors ${
-                currentSession?.id === session.id
-                  ? "text-accent-primary"
-                  : "text-text-secondary hover:text-text-primary"
-              }`}
-            >
-              <p className="text-sm font-medium truncate">{session.title}</p>
-              <p className="text-xs text-text-muted">
-                {new Date(session.createdAt).toLocaleDateString()}
-              </p>
-            </button>
-            
-            {/* Delete button */}
-            {onDeleteSession && (
+            {editingId === session.id ? (
+              // Edit mode
+              <div className="px-3 py-2.5">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      finishEditing(session.id);
+                    } else if (e.key === "Escape") {
+                      cancelEditing();
+                    }
+                  }}
+                  onBlur={() => finishEditing(session.id)}
+                  className="w-full bg-background-tertiary border border-accent-primary text-sm text-text-primary px-2 py-1 rounded focus:outline-none focus:ring-2 focus:ring-accent-primary"
+                />
+              </div>
+            ) : (
+              // View mode
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (confirm(`Delete "${session.title}"?`)) {
-                    onDeleteSession(session.id);
-                  }
-                }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 rounded transition-opacity"
-                title="Delete session"
+                onClick={() => onSelectSession(session)}
+                className={`w-full text-left px-3 py-2.5 pr-16 transition-colors ${
+                  currentSession?.id === session.id
+                    ? "text-accent-primary"
+                    : "text-text-secondary hover:text-text-primary"
+                }`}
               >
-                <svg
-                  className="w-4 h-4 text-red-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                  />
-                </svg>
+                <p className="text-sm font-medium truncate">{session.title}</p>
+                <p className="text-xs text-text-muted">
+                  {new Date(session.createdAt).toLocaleDateString()}
+                </p>
               </button>
+            )}
+            
+            {/* Edit and Delete buttons */}
+            {editingId !== session.id && (
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                {onUpdateTitle && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEditing(session);
+                    }}
+                    className="p-1.5 hover:bg-accent-primary/20 rounded"
+                    title="Edit title"
+                  >
+                    <svg
+                      className="w-4 h-4 text-text-secondary hover:text-accent-primary"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                      />
+                    </svg>
+                  </button>
+                )}
+                {onDeleteSession && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm(`Delete "${session.title}"?`)) {
+                        onDeleteSession(session.id);
+                      }
+                    }}
+                    className="p-1.5 hover:bg-red-500/20 rounded"
+                    title="Delete session"
+                  >
+                    <svg
+                      className="w-4 h-4 text-red-400"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
+                    </svg>
+                  </button>
+                )}
+              </div>
             )}
           </div>
         ))}

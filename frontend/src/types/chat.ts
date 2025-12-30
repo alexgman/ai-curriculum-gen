@@ -6,6 +6,13 @@ export interface Message {
   isStreaming?: boolean;
   toolCalls?: ToolCall[];
   thinkingSteps?: string[];
+  thinkingContent?: string; // Extended thinking from Claude
+  researchPhase?: string; // Current research phase
+  phaseNumber?: number; // Phase number (1, 2, 3)
+  totalPhases?: number; // Total phases (3)
+  needsClarification?: boolean; // Waiting for user feedback
+  clarificationQuestion?: string; // Clarification question
+  canDownloadReport?: boolean; // Final report ready
 }
 
 export interface ToolCall {
@@ -23,6 +30,10 @@ export interface ResearchSession {
   researchData?: ResearchData;
   thinkingStatus?: string | null;
   isGeneratingTitle?: boolean;
+  isEditingTitle?: boolean; // Title edit mode
+  currentPhase?: string; // Current research phase
+  phaseNumber?: number; // Phase number
+  totalPhases?: number; // Total phases
 }
 
 export interface ResearchData {

@@ -1,13 +1,20 @@
-"""LangGraph definition for the Research Agent."""
+"""LangGraph definition for the Research Agent - Simplified."""
 from langgraph.graph import StateGraph, END
 from app.graph.state import AgentState, create_initial_state
 from app.graph.nodes import (
-    reasoning_node,
-    tool_executor_node,
-    reflection_node,
     response_node,
     clarification_node,
 )
+
+# Placeholder nodes for old flow (backward compatibility)
+def reasoning_node(state):
+    return state
+
+def tool_executor_node(state):
+    return state
+
+def reflection_node(state):
+    return state
 
 
 def route_entry(state: AgentState) -> str:

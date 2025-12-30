@@ -263,6 +263,21 @@ export default function MainApp() {
     }
   };
 
+  // Update session title
+  const updateTitle = async (sessionId: string, newTitle: string) => {
+    // Update local state immediately for responsiveness
+    updateSessionById(sessionId, { title: newTitle });
+    
+    // Update backend
+    try {
+      await fetch(`${API_URL}/api/v1/sessions/${sessionId}?title=${encodeURIComponent(newTitle)}`, {
+        method: "PUT",
+      });
+    } catch (error) {
+      console.warn("Failed to update title in backend:", error);
+    }
+  };
+
   // Send message to backend
   const sendMessage = async (content: string) => {
     // Use ref for latest session ID to avoid race conditions
@@ -303,7 +318,10 @@ export default function MainApp() {
       let assistantContent = "";
       let assistantMessageId = generateUUID();
       let thinkingMessages: string[] = [];
+      let currentThinkingBlock = "";  // Accumulate thinking chunks into one block
       let sseBuffer = "";  // Buffer for incomplete SSE messages
+      let messageCreated = false;  // Track if we've created the assistant message
+      let lastUpdateLength = 0;  // Track last update position for smooth streaming
 
       while (reader) {
         const { done, value } = await reader.read();
@@ -327,16 +345,389 @@ export default function MainApp() {
                 if (!jsonStr.trim()) continue;  // Skip empty data lines
                 const data = JSON.parse(jsonStr);
 
-                // Handle session sync from backend - CRITICAL for context persistence
+                // Handle session sync from backend
                 if (data.type === "session" && data.session_id) {
-                  console.log(`🔗 Backend session_id received: ${data.session_id}`);
-                  // If frontend has a different session_id, we need to update the backend's reference
-                  // But more importantly, we need to make sure subsequent messages use the same session_id
-                } else if (data.type === "thinking") {
-                  // Show detailed progress from backend tools - these are the real status updates
-                  const stepInfo = data.step ? ` (Step ${data.step})` : "";
-                  const status = data.status || data.tool || "Processing";
-                  setSessionThinking(`${status}${stepInfo}`, activeSessionId || undefined);
+                  console.log(`🔗 Session: ${data.session_id}`);
+                } 
+                // Handle text streaming - supports both "text" and "text_stream" event types
+                else if ((data.type === "text" || data.type === "text_stream") && data.content) {
+                  assistantContent += data.content;
+                  
+                  // Update UI frequently for smooth streaming (every chunk or every 50 chars)
+                  const shouldUpdate = !messageCreated || 
+                    assistantContent.length - (lastUpdateLength || 0) >= 50;
+                  
+                  if (shouldUpdate) {
+                    messageCreated = true;
+                    lastUpdateLength = assistantContent.length;
+                    const contentSnapshot = assistantContent;
+                    const thinkingSnapshot = thinkingMessages.length > 0 ? [...thinkingMessages] : 
+                      (currentThinkingBlock ? [currentThinkingBlock] : []);
+                    
+                    setSessions((prevSessions) => {
+                      return prevSessions.map((session) => {
+                        if (session.id !== activeSessionId) return session;
+                        
+                        const currentMessages = session.messages || [];
+                        const existingIndex = currentMessages.findIndex(msg => msg.id === assistantMessageId);
+                        
+                        let updatedMessages;
+                        if (existingIndex >= 0) {
+                          updatedMessages = currentMessages.map((msg) =>
+                            msg.id === assistantMessageId
+                              ? { ...msg, content: contentSnapshot, isStreaming: true, thinkingSteps: thinkingSnapshot }
+                              : msg
+                          );
+                        } else {
+                          const newMessage: Message = {
+                            id: assistantMessageId,
+                            role: "assistant" as const,
+                            content: contentSnapshot,
+                            timestamp: new Date().toISOString(),
+                            isStreaming: true,
+                            thinkingSteps: thinkingSnapshot,
+                          };
+                          updatedMessages = [...currentMessages, newMessage];
+                        }
+                        
+                        return { ...session, messages: updatedMessages };
+                      });
+                    });
+                  }
+                }
+                // Handle status updates
+                else if (data.type === "status" && data.content) {
+                  setSessionThinking(data.content, activeSessionId || undefined);
+                }
+                // Handle phase start
+                else if (data.type === "phase_start") {
+                  const phaseTitle = data.title || `Phase ${data.number}`;
+                  setSessionThinking(`🔍 ${phaseTitle}...`, activeSessionId || undefined);
+                }
+                // Handle search activity
+                else if (data.type === "search" || data.type === "search_status") {
+                  const num = data.search_number || data.number || 0;
+                  setSessionThinking(`🔍 Searching... (${num})`, activeSessionId || undefined);
+                }
+                // Handle search complete
+                else if (data.type === "search_complete") {
+                  const total = data.total_searches || 0;
+                  setSessionThinking(`✅ Completed ${total} searches`, activeSessionId || undefined);
+                }
+                // Handle clarification_needed - this is sent when Claude asks clarifying questions
+                else if (data.type === "clarification_needed" && data.content) {
+                  console.log(`📥 Clarification needed: ${data.content.length} chars`);
+                  assistantContent = data.content;
+                  
+                  setSessions((prevSessions) => {
+                    return prevSessions.map((session) => {
+                      if (session.id !== activeSessionId) return session;
+                      
+                      const currentMessages = session.messages || [];
+                      const existingIndex = currentMessages.findIndex(msg => msg.id === assistantMessageId);
+                      
+                      let updatedMessages;
+                      if (existingIndex >= 0) {
+                        updatedMessages = currentMessages.map((msg) =>
+                          msg.id === assistantMessageId
+                            ? { ...msg, content: assistantContent, isStreaming: false, thinkingSteps: [...thinkingMessages] }
+                            : msg
+                        );
+                      } else {
+                        const newMessage: Message = {
+                          id: assistantMessageId,
+                          role: "assistant" as const,
+                          content: assistantContent,
+                          timestamp: new Date().toISOString(),
+                          isStreaming: false,
+                          thinkingSteps: [...thinkingMessages],
+                        };
+                        updatedMessages = [...currentMessages, newMessage];
+                      }
+                      
+                      return { ...session, messages: updatedMessages };
+                    });
+                  });
+                  setSessionThinking(null, activeSessionId || undefined);
+                }
+                // Handle completion_message - final message after all research
+                else if (data.type === "completion_message" && data.content) {
+                  assistantContent += "\n\n" + data.content;
+                  
+                  setSessions((prevSessions) => {
+                    return prevSessions.map((session) => {
+                      if (session.id !== activeSessionId) return session;
+                      
+                      const currentMessages = session.messages || [];
+                      const existingIndex = currentMessages.findIndex(msg => msg.id === assistantMessageId);
+                      
+                      let updatedMessages;
+                      if (existingIndex >= 0) {
+                        updatedMessages = currentMessages.map((msg) =>
+                          msg.id === assistantMessageId
+                            ? { ...msg, content: assistantContent, isStreaming: false }
+                            : msg
+                        );
+                      } else {
+                        const newMessage: Message = {
+                          id: assistantMessageId,
+                          role: "assistant" as const,
+                          content: assistantContent,
+                          timestamp: new Date().toISOString(),
+                          isStreaming: false,
+                        };
+                        updatedMessages = [...currentMessages, newMessage];
+                      }
+                      
+                      return { ...session, messages: updatedMessages };
+                    });
+                  });
+                  setSessionThinking(null, activeSessionId || undefined);
+                }
+                // Handle refinement_complete
+                else if (data.type === "refinement_complete") {
+                  setSessionThinking("✅ Refinement complete", activeSessionId || undefined);
+                }
+                // Handle followup_complete
+                else if (data.type === "followup_complete" && data.content) {
+                  assistantContent = data.content;
+                  
+                  setSessions((prevSessions) => {
+                    return prevSessions.map((session) => {
+                      if (session.id !== activeSessionId) return session;
+                      
+                      const currentMessages = session.messages || [];
+                      const existingIndex = currentMessages.findIndex(msg => msg.id === assistantMessageId);
+                      
+                      let updatedMessages;
+                      if (existingIndex >= 0) {
+                        updatedMessages = currentMessages.map((msg) =>
+                          msg.id === assistantMessageId
+                            ? { ...msg, content: assistantContent, isStreaming: false }
+                            : msg
+                        );
+                      } else {
+                        const newMessage: Message = {
+                          id: assistantMessageId,
+                          role: "assistant" as const,
+                          content: assistantContent,
+                          timestamp: new Date().toISOString(),
+                          isStreaming: false,
+                        };
+                        updatedMessages = [...currentMessages, newMessage];
+                      }
+                      
+                      return { ...session, messages: updatedMessages };
+                    });
+                  });
+                }
+                // Handle navigation (going back)
+                else if (data.type === "navigation" && data.content) {
+                  assistantContent = data.content;
+                  setSessionThinking(data.content, activeSessionId || undefined);
+                }
+                // Handle phase complete
+                else if (data.type === "phase_complete") {
+                  setSessionThinking(`✅ ${data.phase} complete`, activeSessionId || undefined);
+                  console.log(`📊 Phase complete. Accumulated content: ${assistantContent.length} chars`);
+                }
+                // Handle feedback request - THIS IS WHERE WE UPDATE THE UI WITH ALL CONTENT
+                else if (data.type === "feedback_request" && data.content) {
+                  // Append feedback message to accumulated research content
+                  assistantContent += "\n\n" + data.content;
+                  console.log(`📝 FINAL CONTENT LENGTH: ${assistantContent.length} chars`);
+                  console.log(`📝 First 500 chars: ${assistantContent.slice(0, 500)}`);
+                  
+                  // Capture the final content value
+                  const finalContent = assistantContent;
+                  const finalThinking = [...thinkingMessages];
+                  
+                  setSessions((prevSessions) => {
+                    return prevSessions.map((session) => {
+                      if (session.id !== activeSessionId) return session;
+                      
+                      const currentMessages = session.messages || [];
+                      const existingIndex = currentMessages.findIndex(msg => msg.id === assistantMessageId);
+                      
+                      let updatedMessages;
+                      if (existingIndex >= 0) {
+                        updatedMessages = currentMessages.map((msg) =>
+                          msg.id === assistantMessageId
+                            ? { ...msg, content: finalContent, isStreaming: false, thinkingSteps: finalThinking }
+                            : msg
+                        );
+                      } else {
+                        const newMessage: Message = {
+                          id: assistantMessageId,
+                          role: "assistant" as const,
+                          content: finalContent,
+                          timestamp: new Date().toISOString(),
+                          isStreaming: false,
+                          thinkingSteps: finalThinking,
+                        };
+                        updatedMessages = [...currentMessages, newMessage];
+                      }
+                      
+                      return { ...session, messages: updatedMessages };
+                    });
+                  });
+                }
+                // Handle clarification (also marks complete)
+                else if (data.type === "clarification" && data.content) {
+                  assistantContent = data.content;
+                  
+                  setSessions((prevSessions) => {
+                    return prevSessions.map((session) => {
+                      if (session.id !== activeSessionId) return session;
+                      
+                      const currentMessages = session.messages || [];
+                      const existingIndex = currentMessages.findIndex(msg => msg.id === assistantMessageId);
+                      
+                      let updatedMessages;
+                      if (existingIndex >= 0) {
+                        updatedMessages = currentMessages.map((msg) =>
+                          msg.id === assistantMessageId
+                            ? { ...msg, content: assistantContent, isStreaming: false }
+                            : msg
+                        );
+                      } else {
+                        const newMessage: Message = {
+                          id: assistantMessageId,
+                          role: "assistant" as const,
+                          content: assistantContent,
+                          timestamp: new Date().toISOString(),
+                          isStreaming: false,
+                        };
+                        updatedMessages = [...currentMessages, newMessage];
+                      }
+                      
+                      return { ...session, messages: updatedMessages };
+                    });
+                  });
+                }
+                // Handle research complete
+                else if (data.type === "research_complete") {
+                  if (data.report) {
+                    assistantContent = data.report;
+                  }
+                  
+                  setSessions((prevSessions) => {
+                    return prevSessions.map((session) => {
+                      if (session.id !== activeSessionId) return session;
+                      
+                      const currentMessages = session.messages || [];
+                      const existingIndex = currentMessages.findIndex(msg => msg.id === assistantMessageId);
+                      
+                      let updatedMessages;
+                      if (existingIndex >= 0) {
+                        updatedMessages = currentMessages.map((msg) =>
+                          msg.id === assistantMessageId
+                            ? { ...msg, content: assistantContent, isStreaming: false }
+                            : msg
+                        );
+                      } else if (assistantContent) {
+                        const newMessage: Message = {
+                          id: assistantMessageId,
+                          role: "assistant" as const,
+                          content: assistantContent,
+                          timestamp: new Date().toISOString(),
+                          isStreaming: false,
+                        };
+                        updatedMessages = [...currentMessages, newMessage];
+                      } else {
+                        updatedMessages = currentMessages;
+                      }
+                      
+                      return { ...session, messages: updatedMessages };
+                    });
+                  });
+                }
+                // Handle done/complete
+                else if (data.type === "done" || data.type === "complete") {
+                  setSessionThinking(null, activeSessionId || undefined);
+                  if (activeSessionId) {
+                    generateSessionTitle(activeSessionId, content).catch(console.error);
+                  }
+                  
+                  // Final update to mark streaming complete
+                  setSessions((prevSessions) => {
+                    return prevSessions.map((session) => {
+                      if (session.id !== activeSessionId) return session;
+                      
+                      const currentMessages = session.messages || [];
+                      return {
+                        ...session,
+                        messages: currentMessages.map((msg) =>
+                          msg.id === assistantMessageId
+                            ? { ...msg, isStreaming: false }
+                            : msg
+                        ),
+                      };
+                    });
+                  });
+                }
+                // Handle followup
+                else if (data.type === "followup" && data.content) {
+                  assistantContent = data.content;
+                  
+                  setSessions((prevSessions) => {
+                    return prevSessions.map((session) => {
+                      if (session.id !== activeSessionId) return session;
+                      
+                      const currentMessages = session.messages || [];
+                      const existingIndex = currentMessages.findIndex(msg => msg.id === assistantMessageId);
+                      
+                      let updatedMessages;
+                      if (existingIndex >= 0) {
+                        updatedMessages = currentMessages.map((msg) =>
+                          msg.id === assistantMessageId
+                            ? { ...msg, content: assistantContent, isStreaming: false }
+                            : msg
+                        );
+                      } else {
+                        const newMessage: Message = {
+                          id: assistantMessageId,
+                          role: "assistant" as const,
+                          content: assistantContent,
+                          timestamp: new Date().toISOString(),
+                          isStreaming: false,
+                        };
+                        updatedMessages = [...currentMessages, newMessage];
+                      }
+                      
+                      return { ...session, messages: updatedMessages };
+                    });
+                  });
+                }
+                // Handle thinking events - ACCUMULATE into one block, don't create separate entries
+                else if (data.type === "thinking" && data.content) {
+                  // Accumulate thinking chunks into current block
+                  currentThinkingBlock += data.content;
+                  
+                  // Update status with preview of accumulated thinking
+                  const preview = currentThinkingBlock.length > 100 
+                    ? currentThinkingBlock.slice(-100) + "..." 
+                    : currentThinkingBlock;
+                  setSessionThinking(`💭 ${preview.replace(/\n/g, ' ').slice(0, 80)}...`, activeSessionId || undefined);
+                }
+                // Handle thinking_start - save previous block and start new one
+                else if (data.type === "thinking_start") {
+                  if (currentThinkingBlock.trim()) {
+                    thinkingMessages.push(currentThinkingBlock.trim());
+                  }
+                  currentThinkingBlock = "";
+                }
+                // Handle block_stop - finalize current thinking block
+                else if (data.type === "block_stop") {
+                  if (currentThinkingBlock.trim()) {
+                    thinkingMessages.push(currentThinkingBlock.trim());
+                    currentThinkingBlock = "";
+                  }
+                }
+                // Handle search status events
+                else if (data.type === "search_status") {
+                  const searchNum = data.search_number || data.number || 0;
+                  setSessionThinking(`🔍 Searching... (${searchNum})`, activeSessionId || undefined);
                 } else if (data.type === "node") {
                   const nodeName = data.node;
                   const stepNum = data.step || thinkingMessages.length + 1;
@@ -661,6 +1052,7 @@ export default function MainApp() {
         onSelectSession={loadSession}
         onNewSession={createNewSession}
         onDeleteSession={deleteSession}
+        onUpdateTitle={updateTitle}
       />
 
       <main className="flex-1 flex flex-col">

@@ -23,10 +23,15 @@ pgvector==0.2.4
 redis==5.0.1
 
 # External APIs
-google-search-results==2.4.2  # SerpAPI
-praw==7.7.1  # Reddit
-firecrawl-py==0.0.16
-httpx==0.26.0
+httpx>=0.27.0
+
+# MCP (Model Context Protocol)
+mcp>=1.0.0
+
+# Document Generation
+python-docx>=1.1.0
+weasyprint>=62.0
+markdown>=3.5.0
 
 # Utilities
 python-dotenv==1.0.0

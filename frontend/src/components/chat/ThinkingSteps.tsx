@@ -16,42 +16,52 @@ export function ThinkingSteps({ steps }: ThinkingStepsProps) {
 
   if (filteredSteps.length === 0) return null;
 
+  // Combine all steps into one block for better display
+  const combinedThinking = filteredSteps.join("\n\n");
+  const previewLength = 200;
+  const hasMore = combinedThinking.length > previewLength;
+  const preview = combinedThinking.slice(0, previewLength).replace(/\n/g, ' ').trim();
+
   return (
-    <div className="mb-4 border border-zinc-700 rounded-lg bg-background-tertiary">
+    <div className="mb-4 border border-zinc-700 rounded-lg bg-background-tertiary overflow-hidden">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-zinc-800/50 rounded-lg transition-colors"
+        className="w-full px-4 py-3 flex items-start gap-2 text-left hover:bg-zinc-800/50 transition-colors"
       >
-        <span className="text-sm text-text-secondary flex items-center gap-2">
-          <svg
-            className={`w-4 h-4 transition-transform ${
-              isExpanded ? "rotate-90" : ""
-            }`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M9 5l7 7-7 7"
-            />
-          </svg>
-          <span className="font-medium">{filteredSteps.length} reasoning steps</span>
-        </span>
+        <svg
+          className={`w-4 h-4 mt-0.5 flex-shrink-0 transition-transform ${
+            isExpanded ? "rotate-90" : ""
+          }`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M9 5l7 7-7 7"
+          />
+        </svg>
+        <div className="flex-1 min-w-0">
+          <span className="text-sm font-medium text-text-secondary">
+            {filteredSteps.length} reasoning {filteredSteps.length === 1 ? 'step' : 'steps'}
+          </span>
+          {!isExpanded && preview && (
+            <p className="text-xs text-text-muted mt-1 line-clamp-2">
+              {preview}{hasMore ? '...' : ''}
+            </p>
+          )}
+        </div>
       </button>
 
       {isExpanded && (
-        <div className="px-4 pb-3 space-y-1.5 border-l-2 border-accent-primary/30 ml-4">
-          {filteredSteps.map((step, index) => (
-            <div
-              key={index}
-              className="text-sm text-text-secondary pl-4 py-1"
-            >
-              {step}
+        <div className="px-4 pb-4 border-t border-zinc-700/50">
+          <div className="mt-3 max-h-[400px] overflow-y-auto">
+            <div className="text-sm text-text-secondary whitespace-pre-wrap leading-relaxed">
+              {combinedThinking}
             </div>
-          ))}
+          </div>
         </div>
       )}
     </div>

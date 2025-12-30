@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import init_db
-from app.api.v1 import chat
+from app.api.v1 import chat, research
 
 
 @asynccontextmanager
@@ -42,6 +42,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
+app.include_router(research.router, prefix="/api/v1/research", tags=["research"])
 
 
 @app.get("/")

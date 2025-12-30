@@ -23,8 +23,8 @@ curl -s http://localhost:3000 > /dev/null 2>&1 && echo "✓ Frontend: running on
 
 echo ""
 echo "Access URLs:"
-echo "  Frontend: http://3.150.159.160:3000"
-echo "  Backend:  http://3.150.159.160:8000"
+echo "  Frontend: http://3.17.95.237:3000"
+echo "  Backend:  http://3.17.95.237:8000"
 echo ""
 echo "Logs:"
 echo "  Backend:  /tmp/backend.log"
